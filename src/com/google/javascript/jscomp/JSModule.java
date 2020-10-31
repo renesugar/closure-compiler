@@ -37,7 +37,6 @@ import java.util.Set;
 /**
  * A JavaScript module has a unique name, consists of a list of compiler inputs, and can depend on
  * other modules.
- *
  */
 public final class JSModule extends DependencyInfo.Base implements Serializable {
   // The name of the artificial module containing all strong sources when there is no module spec.
@@ -294,26 +293,14 @@ public final class JSModule extends DependencyInfo.Base implements Serializable 
     return name.equals(STRONG_MODULE_NAME) || name.equals(WEAK_MODULE_NAME);
   }
 
+  public boolean isWeak() {
+    return name.equals(WEAK_MODULE_NAME);
+  }
+
   /** Returns the module name (primarily for debugging). */
   @Override
   public String toString() {
     return name;
-  }
-
-  /**
-   * Removes any references to nodes of the AST and resets fields used by JSModuleGraph.
-   *
-   * <p>This method is needed by some tests to allow modules to be reused and their ASTs garbage
-   * collected.
-   * @deprecated Fix tests to avoid reusing modules.
-   */
-  @Deprecated
-  void resetThisModuleSoItCanBeReused() {
-    for (CompilerInput input : inputs) {
-      input.clearAst();
-    }
-    depth = -1;
-    index = -1;
   }
 
   /**

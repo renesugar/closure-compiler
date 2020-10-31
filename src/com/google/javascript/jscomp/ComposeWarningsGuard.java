@@ -35,8 +35,6 @@ import java.util.TreeSet;
  * 3) the rest should be reported as error
  *
  * This class is designed for such behavior.
- *
- * @author anatol@google.com (Anatol Pomazau)
  */
 public class ComposeWarningsGuard extends WarningsGuard {
 
@@ -158,30 +156,6 @@ public class ComposeWarningsGuard extends WarningsGuard {
 
   List<WarningsGuard> getGuards() {
     return Collections.unmodifiableList(new ArrayList<>(guards));
-  }
-
-  /**
-   * Make a warnings guard that's the same as this one but demotes all
-   * errors to warnings.
-   */
-  ComposeWarningsGuard makeEmergencyFailSafeGuard() {
-    ComposeWarningsGuard safeGuard = new ComposeWarningsGuard();
-    safeGuard.demoteErrors = true;
-    for (WarningsGuard guard : guards.descendingSet()) {
-      safeGuard.addGuard(guard);
-    }
-    return safeGuard;
-  }
-
-  @Override
-  protected ComposeWarningsGuard makeNonStrict() {
-    ComposeWarningsGuard nonStrictGuard = new ComposeWarningsGuard();
-    for (WarningsGuard guard : guards.descendingSet()) {
-      if (!(guard instanceof StrictWarningsGuard)) {
-        nonStrictGuard.addGuard(guard.makeNonStrict());
-      }
-    }
-    return nonStrictGuard;
   }
 
   @Override

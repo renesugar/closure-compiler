@@ -15,7 +15,7 @@
  */
 package com.google.javascript.jscomp;
 
-import static com.google.javascript.jscomp.parsing.Config.JsDocParsing.INCLUDE_DESCRIPTIONS_WITH_WHITESPACE;
+import static com.google.javascript.jscomp.parsing.Config.JsDocParsing.INCLUDE_ALL_COMMENTS;
 
 import com.google.common.annotations.GwtIncompatible;
 import com.google.common.collect.ImmutableList;
@@ -53,7 +53,7 @@ public final class Linter {
     private Builder() {
       options = new CompilerOptions();
       options.setLanguage(LanguageMode.ECMASCRIPT_NEXT);
-      options.setParseJsDocDocumentation(JsDocParsing.INCLUDE_DESCRIPTIONS_WITH_WHITESPACE);
+      options.setParseJsDocDocumentation(JsDocParsing.INCLUDE_ALL_COMMENTS);
       options.setPreserveDetailedSourceInfo(true);
 
       // These are necessary to make sure that suggested fixes are printed correctly.
@@ -62,7 +62,7 @@ public final class Linter {
       options.setPreferSingleQuotes(true);
       options.setEmitUseStrict(false);
 
-      options.setParseJsDocDocumentation(INCLUDE_DESCRIPTIONS_WITH_WHITESPACE);
+      options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
       options.setCodingConvention(new GoogleCodingConvention());
 
       // Even though we're not running the typechecker, enable the checkTypes DiagnosticGroup, since
@@ -77,10 +77,11 @@ public final class Linter {
       options.setWarningLevel(DiagnosticGroups.UNUSED_PRIVATE_PROPERTY, CheckLevel.WARNING);
       options.setWarningLevel(DiagnosticGroups.STRICT_MISSING_REQUIRE, CheckLevel.ERROR);
       options.setWarningLevel(DiagnosticGroups.EXTRA_REQUIRE, CheckLevel.ERROR);
-      options.setWarningLevel(DiagnosticGroups.USE_OF_GOOG_BASE, CheckLevel.WARNING);
       options.setWarningLevel(DiagnosticGroups.MISPLACED_SUPPRESS, CheckLevel.WARNING);
       options.setWarningLevel(DiagnosticGroups.TYPE_IMPORT_CODE_REFERENCES, CheckLevel.ERROR);
       options.setWarningLevel(DiagnosticGroups.MODULE_LOAD, CheckLevel.OFF);
+      options.setWarningLevel(DiagnosticGroups.STRICT_MODULE_CHECKS, CheckLevel.WARNING);
+      options.setWarningLevel(DiagnosticGroups.UNDERSCORE, CheckLevel.WARNING);
       options.setSummaryDetailLevel(0);
     }
 

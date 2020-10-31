@@ -17,7 +17,7 @@
 package com.google.javascript.jscomp;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.javascript.rhino.testing.NodeSubject.assertNode;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.truth.Correspondence;
@@ -150,18 +150,9 @@ public class RecoverableJsAstTest {
       assertThat(mainRoot.isRoot()).isTrue();
       assertThat(mainRoot.hasChildren()).isFalse();
     } else {
-      String explanation = expectedRoot.checkTreeEqualsIncludingJsDoc(mainRoot);
-      if (explanation != null) {
-        String expectedAsSource = compiler.toSource(expectedRoot);
-        String mainAsSource = compiler.toSource(mainRoot);
-        if (expectedAsSource.equals(mainAsSource)) {
-          assertWithMessage("In: %s\n%s", expectedAsSource, explanation).fail();
-        } else {
-          assertWithMessage(
-                  "Expected: %s\nResult:   %s\n%s", expectedAsSource, mainAsSource, explanation)
-              .fail();
-        }
-      }
+      assertNode(mainRoot)
+          .usingSerializer(compiler::toSource)
+          .isEqualIncludingJsDocTo(expectedRoot);
     }
 
     assertThat(compiler.getResult().errors)
@@ -169,7 +160,7 @@ public class RecoverableJsAstTest {
         .containsExactlyElementsIn(expectedErrors)
         .inOrder();
 
-    assertThat(ast.getAstRoot(compiler)).isNotSameAs(realAst.getAstRoot(compiler));
+    assertThat(ast.getAstRoot(compiler)).isNotSameInstanceAs(realAst.getAstRoot(compiler));
   }
 
   /**
@@ -183,20 +174,11 @@ public class RecoverableJsAstTest {
     Node root = compiler.getRoot();
     assertThat(root).isNotNull();
     Node externsRoot = root.getFirstChild();
-    Node mainRoot = externsRoot.getNext();
-    return mainRoot;
+    return externsRoot.getNext();
   }
 
   private static final Correspondence<JSError, String> DESCRIPTION_EQUALITY =
-      new Correspondence<JSError, String>() {
-        @Override
-        public boolean compare(JSError error, String description) {
-          return Objects.equals(error.description, description);
-        }
-
-        @Override
-        public String toString() {
-          return "has description equal to";
-        }
-      };
+      Correspondence.from(
+          (error, description) -> Objects.equals(error.getDescription(), description),
+          "has description equal to");
 }

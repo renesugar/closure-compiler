@@ -17,7 +17,6 @@
 package com.google.javascript.jscomp;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.javascript.jscomp.CheckAccessControls.VISIBILITY_MISMATCH;
 import static com.google.javascript.jscomp.CheckLevel.ERROR;
 import static com.google.javascript.jscomp.CheckLevel.OFF;
 import static com.google.javascript.jscomp.CheckLevel.WARNING;
@@ -25,6 +24,7 @@ import static com.google.javascript.jscomp.CompilerTestCase.lines;
 import static com.google.javascript.jscomp.TypeCheck.DETERMINISTIC_TEST;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.javascript.jscomp.ShowByPathWarningsGuard.ShowType;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
@@ -38,7 +38,6 @@ import org.junit.runners.JUnit4;
 /**
  * Testcase for WarningsGuard and its implementations.
  *
- * @author anatol@google.com (Anatol Pomazau)
  */
 @RunWith(JUnit4.class)
 public final class WarningsGuardTest {
@@ -117,33 +116,35 @@ public final class WarningsGuardTest {
 
   @Test
   public void testComposeGuard() {
-    WarningsGuard g1 = new WarningsGuard() {
-      private static final long serialVersionUID = 1L;
+    WarningsGuard g1 =
+        new WarningsGuard() {
+          private static final long serialVersionUID = 1L;
 
-      @Override
-      public CheckLevel level(JSError error) {
-        return error.sourceName.equals("123456") ? ERROR : null;
-      }
+          @Override
+          public CheckLevel level(JSError error) {
+            return error.getSourceName().equals("123456") ? ERROR : null;
+          }
 
-      @Override
-      public boolean disables(DiagnosticGroup otherGroup) {
-        return false;
-      }
-    };
+          @Override
+          public boolean disables(DiagnosticGroup otherGroup) {
+            return false;
+          }
+        };
 
-    WarningsGuard g2 = new WarningsGuard() {
-      private static final long serialVersionUID = 1L;
+    WarningsGuard g2 =
+        new WarningsGuard() {
+          private static final long serialVersionUID = 1L;
 
-      @Override
-      public CheckLevel level(JSError error) {
-        return error.lineNumber == 12 ? WARNING : null;
-      }
+          @Override
+          public CheckLevel level(JSError error) {
+            return error.getLineNumber() == 12 ? WARNING : null;
+          }
 
-      @Override
-      public boolean disables(DiagnosticGroup otherGroup) {
-        return true;
-      }
-    };
+          @Override
+          public boolean disables(DiagnosticGroup otherGroup) {
+            return true;
+          }
+        };
 
     WarningsGuard guard = new ComposeWarningsGuard(g1, g2);
 
@@ -265,40 +266,6 @@ public final class WarningsGuardTest {
     guardA.addGuard(visibilityOff);
 
     assertThat(guardA.disables(DiagnosticGroups.ACCESS_CONTROLS)).isTrue();
-  }
-
-  @Test
-  public void testEmergencyComposeGuard1() {
-    ComposeWarningsGuard guard = new ComposeWarningsGuard();
-    guard.addGuard(new StrictWarningsGuard());
-    assertThat(guard.level(makeErrorWithLevel(WARNING))).isEqualTo(ERROR);
-    assertThat(guard.makeEmergencyFailSafeGuard().level(makeErrorWithLevel(WARNING)))
-        .isEqualTo(WARNING);
-  }
-
-  @Test
-  public void testEmergencyComposeGuard2() {
-    ComposeWarningsGuard guard = new ComposeWarningsGuard();
-    guard.addGuard(
-        new DiagnosticGroupWarningsGuard(
-            DiagnosticGroups.ACCESS_CONTROLS, ERROR));
-    assertThat(guard.level(makeErrorWithType(VISIBILITY_MISMATCH))).isEqualTo(ERROR);
-    assertThat(guard.makeEmergencyFailSafeGuard().level(makeErrorWithType(VISIBILITY_MISMATCH)))
-        .isEqualTo(WARNING);
-  }
-
-  @Test
-  public void testEmergencyComposeGuard3() {
-    ComposeWarningsGuard guard = new ComposeWarningsGuard();
-    guard.addGuard(
-        new DiagnosticGroupWarningsGuard(
-            DiagnosticGroups.ACCESS_CONTROLS, ERROR));
-    guard.addGuard(
-        new DiagnosticGroupWarningsGuard(
-            DiagnosticGroups.ACCESS_CONTROLS, OFF));
-    assertThat(guard.level(makeErrorWithType(VISIBILITY_MISMATCH))).isEqualTo(OFF);
-    assertThat(guard.makeEmergencyFailSafeGuard().level(makeErrorWithType(VISIBILITY_MISMATCH)))
-        .isEqualTo(OFF);
   }
 
   @Test
@@ -443,6 +410,32 @@ public final class WarningsGuardTest {
   }
 
   @Test
+  public void testSuppressGuard_onCompoundAssignment() {
+    Compiler compiler = new Compiler();
+    WarningsGuard guard =
+        new SuppressDocWarningsGuard(
+            compiler, ImmutableMap.of("deprecated", new DiagnosticGroup(BAR_WARNING)));
+
+    Node code =
+        compiler.parseTestCode("var goog = {}; " + "/** @suppress {deprecated} */ goog.f += a");
+    assertThat(guard.level(JSError.make(findNameNode(code, "a"), BAR_WARNING))).isEqualTo(OFF);
+  }
+
+  @Test
+  public void testSuppressGuard_onDetachedNode() {
+    Compiler compiler = new Compiler();
+    WarningsGuard guard =
+        new SuppressDocWarningsGuard(
+            compiler, ImmutableMap.of("deprecated", new DiagnosticGroup(BAR_WARNING)));
+
+    Node code = compiler.parseTestCode("/** @fileoverview @suppress {deprecated} */\n\nvar x;");
+    // Create an error that has the right source file, but no parents.
+    // This is the state of JSDoc nodes.
+    JSError error = makeError(code.getSourceFileName());
+    assertThat(guard.level(error)).isEqualTo(OFF);
+  }
+
+  @Test
   public void testComposeGuardCycle() {
     ComposeWarningsGuard guard = new ComposeWarningsGuard(
         visibilityOff, visibilityWarning);
@@ -494,18 +487,5 @@ public final class WarningsGuardTest {
 
   private static JSError makeError(String sourcePath, int lineno) {
     return JSError.make(sourcePath, lineno, -1, BAR_WARNING);
-  }
-
-  private static JSError makeErrorWithType(DiagnosticType type) {
-    Node n = new Node(Token.EMPTY);
-    n.setSourceFileForTesting("input");
-    return JSError.make(n, type);
-  }
-
-  private static JSError makeErrorWithLevel(CheckLevel level) {
-    Node n = new Node(Token.EMPTY);
-    n.setSourceFileForTesting("input");
-    return JSError.make(n,
-        DiagnosticType.make("FOO", level, "Foo description"));
   }
 }

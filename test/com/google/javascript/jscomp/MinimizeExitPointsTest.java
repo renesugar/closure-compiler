@@ -45,11 +45,6 @@ public final class MinimizeExitPointsTest extends CompilerTestCase {
     return new PeepholeOptimizationsPass(compiler, getName(), new MinimizeExitPoints());
   }
 
-  @Override
-  protected int getNumRepetitions() {
-    return 1;
-  }
-
   void foldSame(String js) {
     testSame(js);
   }
@@ -153,6 +148,23 @@ public final class MinimizeExitPointsTest extends CompilerTestCase {
          "function f(){g:if(a()){}else{}}");
     fold("function f(){try{g:if(a()){throw 9;} return;}finally{return}}",
          "function f(){try{g:if(a()){throw 9;}}finally{return}}");
+  }
+
+  @Test
+  public void testFunctionReturnScoped() {
+    testSame(
+        lines(
+            "function f(a) {",
+            "  if (a) {",
+            "    const a = Math.random();",
+            "",
+            "    if (a < 0.5) {",
+            "        return a;",
+            "    }",
+            "  }",
+            "",
+            "  return a;",
+            "}"));
   }
 
   @Test

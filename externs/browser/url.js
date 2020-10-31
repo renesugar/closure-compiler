@@ -66,6 +66,19 @@ URLSearchParams.prototype.append = function(name, value) {};
 URLSearchParams.prototype.delete = function(name) {};
 
 /**
+ * @return {!IteratorIterable<!Array<string>>}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/URLSearchParams/entries
+ */
+URLSearchParams.prototype.entries = function() {};
+
+/**
+ * @param {function(string, string)} callback
+ * @return {undefined}
+ */
+URLSearchParams.prototype.forEach = function(callback) {};
+
+/**
  * @param {string} name
  * @return {?string}
  */
@@ -84,6 +97,12 @@ URLSearchParams.prototype.getAll = function(name) {};
 URLSearchParams.prototype.has = function(name) {};
 
 /**
+ * @return {!IteratorIterable<string>}
+ */
+URLSearchParams.prototype.keys = function() {};
+
+
+/**
  * @param {string} name
  * @param {string} value
  * @return {undefined}
@@ -94,6 +113,11 @@ URLSearchParams.prototype.set = function(name, value) {};
  * @return {undefined}
  */
 URLSearchParams.prototype.sort = function() {};
+
+/**
+ * @return {!IteratorIterable<string>}
+ */
+URLSearchParams.prototype.values = function() {};
 
 /**
  * @see https://url.spec.whatwg.org
@@ -107,8 +131,7 @@ function URL(url, base) {}
 URL.prototype.href;
 
 /**
- * @const
- * @type {string}
+ * @const {string}
  */
 URL.prototype.origin;
 
@@ -137,8 +160,7 @@ URL.prototype.pathname;
 URL.prototype.search;
 
 /**
- * @const
- * @type {!URLSearchParams}
+ * @const {!URLSearchParams}
  */
 URL.prototype.searchParams;
 

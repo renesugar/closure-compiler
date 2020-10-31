@@ -15,7 +15,6 @@
  */
 
 'require base';
-'require es6/symbol';
 'require es6/util/setprototypeof';
 'require es6/util/makeiterator';
 
@@ -335,7 +334,7 @@ $jscomp.generator.Context.prototype.yield = function(value, resumeAddress) {
  * Causes the state machine program to yield all values from an iterator.
  *
  * @final
- * @param {string|!Iterator<VALUE>|!Iterable<VALUE>|!Arguments<VALUE>} iterable
+ * @param {string|!Iterator<VALUE>|!Iterable<VALUE>|!Arguments} iterable
  *     Iterator to yeild all values from.
  * @param {number} resumeAddress The address where the program should resume.
  * @return {void | {value: VALUE}}
@@ -844,8 +843,6 @@ $jscomp.generator.Generator_ = function(engine) {
     return engine.return_(value);
   };
 
-  $jscomp.initSymbolIterator();
-
   /** @this {$jscomp.generator.Generator_<VALUE>} */
   this[Symbol.iterator] = function() {
     return this;
@@ -874,7 +871,9 @@ $jscomp.generator.createGenerator = function(generator, program) {
   // instance by the constructor, so this does no harm.
   // We also cast Generator_ to Object to hide dynamic inheritance from
   // jscompiler, it makes ConformanceRules$BanUnknownThis happy.
-  if ($jscomp.setPrototypeOf) {
+  // In some transpiled cases there may not be an explicit prototype, in which
+  // case we skip this step.
+  if ($jscomp.setPrototypeOf && generator.prototype) {
     /** @type {function(!Object, ?Object): !Object} */ ($jscomp.setPrototypeOf)(
         result, generator.prototype);
   }

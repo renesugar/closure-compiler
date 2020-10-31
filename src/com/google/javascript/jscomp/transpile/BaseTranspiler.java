@@ -26,9 +26,7 @@ import com.google.javascript.jscomp.Compiler;
 import com.google.javascript.jscomp.CompilerOptions;
 import com.google.javascript.jscomp.CompilerOptions.Es6ModuleTranspilation;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
-import com.google.javascript.jscomp.DiagnosticGroup;
 import com.google.javascript.jscomp.DiagnosticGroups;
-import com.google.javascript.jscomp.DiagnosticType;
 import com.google.javascript.jscomp.PropertyRenamingPolicy;
 import com.google.javascript.jscomp.Result;
 import com.google.javascript.jscomp.SourceFile;
@@ -136,7 +134,8 @@ public final class BaseTranspiler implements Transpiler {
     public CompileResult compile(URI path, String code) {
       Compiler compiler = compiler();
       Result result =
-          compiler.compile(EXTERNS, SourceFile.fromCode(path.toString(), code), options());
+          compiler.compile(
+              createTrivialExterns(), SourceFile.fromCode(path.toString(), code), options());
       String source = compiler.toSource();
       StringBuilder sourceMap = new StringBuilder();
       if (result.sourceMap != null) {
@@ -160,7 +159,7 @@ public final class BaseTranspiler implements Transpiler {
       Compiler compiler = compiler();
       CompilerOptions options = options();
       options.setForceLibraryInjection(ImmutableList.of(library));
-      compiler.compile(EXTERNS, EMPTY, options);
+      compiler.compile(createTrivialExterns(), createEmptySource(), options);
       return compiler.toSource();
     }
 
@@ -184,7 +183,6 @@ public final class BaseTranspiler implements Transpiler {
       options.setPropertyRenaming(PropertyRenamingPolicy.OFF);
       options.setWrapGoogModulesForWhitespaceOnly(false);
       options.setPrettyPrint(true);
-      options.setWarningLevel(ES5_WARNINGS, CheckLevel.OFF);
       options.setWarningLevel(DiagnosticGroups.NON_STANDARD_JSDOC, CheckLevel.OFF);
       options.setEs6ModuleTranspilation(Es6ModuleTranspilation.TO_COMMON_JS_LIKE_MODULES);
       options.setModuleResolutionMode(moduleResolution);
@@ -215,11 +213,13 @@ public final class BaseTranspiler implements Transpiler {
           }));
     }
 
-    protected static final SourceFile EXTERNS =
-        SourceFile.fromCode("externs.js", "function Symbol() {}");
-    protected static final SourceFile EMPTY = SourceFile.fromCode("empty.js", "");
-    protected static final DiagnosticGroup ES5_WARNINGS = new DiagnosticGroup(
-        DiagnosticType.error("JSC_CANNOT_CONVERT", ""));
+    protected SourceFile createTrivialExterns() {
+      return SourceFile.fromCode("externs.js", "function Symbol() {}");
+    }
+
+    protected SourceFile createEmptySource() {
+      return SourceFile.fromCode("empty.js", "");
+    }
   }
 
   /**

@@ -36,7 +36,6 @@ import java.util.Map;
  * Class for parsing version 3 of the SourceMap format, as produced by the
  * Closure Compiler, etc.
  * http://code.google.com/p/closure-compiler/wiki/SourceMaps
- * @author johnlenz@google.com (John Lenz)
  */
 public final class SourceMapConsumerV3 implements SourceMapConsumer,
     SourceMappingReversable {
@@ -679,6 +678,14 @@ public final class SourceMapConsumerV3 implements SourceMapConsumer,
           }
         }
       }
+    }
+    // Complete pending entry if any.
+    if (pending) {
+      // Given that this is the last entry and we don't know how much of the generated file left
+      // after that entry - make it of length 1.
+      FilePosition endPosition =
+          new FilePosition(startPosition.getLine(), startPosition.getColumn() + 1);
+      visitor.visit(sourceName, symbolName, sourceStartPosition, startPosition, endPosition);
     }
   }
 }

@@ -23,6 +23,8 @@ import static com.google.javascript.jscomp.JsMessage.Style.RELAX;
 import static com.google.javascript.jscomp.JsMessageVisitor.MESSAGE_TREE_MALFORMED;
 import static com.google.javascript.jscomp.JsMessageVisitor.isLowerCamelCaseWithNumericSuffixes;
 import static com.google.javascript.jscomp.JsMessageVisitor.toLowerCamelCaseWithNumericSuffixes;
+import static com.google.javascript.jscomp.testing.JSCompCorrespondences.DESCRIPTION_EQUALITY;
+import static com.google.javascript.jscomp.testing.JSCompCorrespondences.DIAGNOSTIC_EQUALITY;
 import static com.google.javascript.jscomp.testing.JSErrorSubject.assertError;
 
 import com.google.common.base.Joiner;
@@ -45,11 +47,14 @@ import org.junit.runners.JUnit4;
 /**
  * Test for {@link JsMessageVisitor}.
  *
- * @author anatol@google.com (Anatol Pomazau)
  */
 @RunWith(JUnit4.class)
 public final class JsMessageVisitorTest {
   private static final Joiner LINE_JOINER = Joiner.on('\n');
+
+  private static String lines(String... lines) {
+    return LINE_JOINER.join(lines);
+  }
 
   private static class RenameMessagesVisitor extends AbstractPostOrderCallback {
     @Override
@@ -249,15 +254,62 @@ public final class JsMessageVisitorTest {
   }
 
   @Test
+  public void testMessageAliasedToObject() {
+    extractMessagesSafely("a.b.MSG_FOO = MSG_FOO;");
+    assertThat(messages).isEmpty();
+  }
+
+  @Test
+  public void testMsgPropertyAliasesMsgVariable_mismatchedMSGNameIsAllowed() {
+    extractMessages("a.b.MSG_FOO_ALIAS = MSG_FOO;");
+    assertThat(compiler.getErrors()).isEmpty();
+  }
+
+  @Test
+  public void testMsgPropertyAliasesMsgProperty_mismatchedMSGNameIsAllowed() {
+    extractMessages("a.b.MSG_FOO_ALIAS = c.d.MSG_FOO;");
+    assertThat(compiler.getErrors()).isEmpty();
+  }
+
+  @Test
+  public void testMessageAliasedToObject_nonMSGNameIsNotAllowed() {
+    extractMessages("a.b.MSG_FOO_ALIAS = someVarName;");
+    assertThat(compiler.getErrors()).hasSize(1);
+    assertError(compiler.getErrors().get(0)).hasType(MESSAGE_TREE_MALFORMED);
+  }
+
+  @Test
+  public void testMessageExport_shortHand() {
+    extractMessagesSafely("exports = {MSG_FOO};");
+    assertThat(messages).isEmpty();
+  }
+
+  @Test
+  public void testMessageExport_longHand() {
+    extractMessagesSafely("exports = {MSG_FOO: MSG_FOO};");
+    assertThat(messages).isEmpty();
+  }
+
+  @Test
+  public void testMessageDefinedInExportsIsNotOrphaned() {
+    extractMessagesSafely(""
+        + "exports = {"
+        + "  /** @desc Description. */"
+        + "  MSG_FOO: goog.getMsg('Foo'),"
+        + "};");
+    assertThat(compiler.getWarnings()).isEmpty();
+  }
+
+  @Test
   public void testJsMessageAlias_fromObjectDestrucuturing_longhand() {
     extractMessagesSafely("({MSG_MENU_MARK_AS_UNREAD: MSG_MENU_MARK_AS_UNREAD} = x);");
   }
 
   @Test
-  public void testJsMessageAlias_fromObjectDestrucuturing_longhand_invalid() {
-    extractMessages("({MSG_NOT_FOO: MSG_FOO} = x);");
+  public void testJsMessageAlias_fromObjectDestrucuturing_MSGlonghand_allowed() {
+    extractMessages("({MSG_FOO: MSG_FOO_ALIAS} = {MSG_FOO: goog.getMsg('Foo')});");
 
-    assertThat(compiler.getErrors()).hasSize(1);
+    assertThat(compiler.getErrors()).isEmpty();
   }
 
   @Test
@@ -274,23 +326,24 @@ public final class JsMessageVisitorTest {
   @Test
   public void testOrphanedJsMessage() {
     extractMessagesSafely("goog.getMsg('a')");
-    assertThat(compiler.getWarnings()).hasSize(1);
     assertThat(messages).isEmpty();
 
-    JSError warn = compiler.getWarnings().get(0);
-    assertError(warn).hasType(JsMessageVisitor.MESSAGE_NODE_IS_ORPHANED);
+    assertThat(compiler.getWarnings())
+        .comparingElementsUsing(DIAGNOSTIC_EQUALITY)
+        .containsExactly(JsMessageVisitor.MESSAGE_NODE_IS_ORPHANED);
   }
 
   @Test
   public void testMessageWithoutDescription() {
     extractMessagesSafely("var MSG_HELLO = goog.getMsg('a')");
-    assertThat(compiler.getWarnings()).hasSize(1);
-    assertThat(messages).hasSize(1);
 
+    assertThat(messages).hasSize(1);
     JsMessage msg = messages.get(0);
     assertThat(msg.getKey()).isEqualTo("MSG_HELLO");
 
-    assertError(compiler.getWarnings().get(0)).hasType(JsMessageVisitor.MESSAGE_HAS_NO_DESCRIPTION);
+    assertThat(compiler.getWarnings())
+        .comparingElementsUsing(DIAGNOSTIC_EQUALITY)
+        .containsExactly(JsMessageVisitor.MESSAGE_HAS_NO_DESCRIPTION);
   }
 
   @Test
@@ -302,7 +355,7 @@ public final class JsMessageVisitorTest {
 
     JSError malformedTreeError = compiler.getErrors().get(0);
     assertError(malformedTreeError).hasType(JsMessageVisitor.MESSAGE_TREE_MALFORMED);
-    assertThat(malformedTreeError.description)
+    assertThat(malformedTreeError.getDescription())
         .isEqualTo("Message parse tree malformed. " + "STRING or ADD node expected; found: POS");
   }
 
@@ -333,9 +386,10 @@ public final class JsMessageVisitorTest {
 
     JSError malformedTreeError = compiler.getErrors().get(0);
     assertError(malformedTreeError).hasType(JsMessageVisitor.MESSAGE_TREE_MALFORMED);
-    assertThat(malformedTreeError.description).isEqualTo(
-        "Message parse tree malformed."
-            + " Template literals with substitutions are not allowed.");
+    assertThat(malformedTreeError.getDescription())
+        .isEqualTo(
+            "Message parse tree malformed."
+                + " Template literals with substitutions are not allowed.");
   }
 
   @Test
@@ -442,6 +496,47 @@ public final class JsMessageVisitorTest {
   }
 
   @Test
+  public void testAllowOneMSGtoAliasAnotherMSG() {
+    mode = CLOSURE;
+
+    // NOTE: tsickle code generation can end up creating new MSG_* variables that are temporary
+    // aliases of existing ones that were defined correctly using goog.getMsg(). Don't complain
+    // about them.
+    extractMessages(
+        lines(
+            "/** @desc A foo message */",
+            "var MSG_FOO = goog.getMsg('Foo message');",
+            "var MSG_FOO_1 = MSG_FOO;",
+            ""));
+
+    assertThat(messages).hasSize(1);
+    JsMessage msg = messages.get(0);
+    assertThat(msg.getKey()).isEqualTo("MSG_FOO");
+    assertThat(msg.toString()).isEqualTo("Foo message");
+    assertThat(compiler.getWarnings()).isEmpty();
+  }
+
+  @Test
+  public void testDisallowOneMSGtoAliasNONMSG() {
+    mode = CLOSURE;
+
+    // NOTE: tsickle code generation can end up creating new MSG_* variables that are temporary
+    // aliases of existing ones that were defined correctly using goog.getMsg(). Don't complain
+    // about them.
+    extractMessages(
+        lines(
+            "/** @desc A foo message */",
+            "var mymsg = 'Foo message';",
+            "var MSG_FOO_1 = mymsg;",
+            ""));
+
+    assertThat(messages).isEmpty();
+    assertThat(compiler.getWarnings()).hasSize(1);
+    assertError(compiler.getWarnings().get(0))
+        .hasType(JsMessageVisitor.MESSAGE_NOT_INITIALIZED_USING_NEW_SYNTAX);
+  }
+
+  @Test
   public void testClosureFormatParametizedFunction() {
     extractMessagesSafely("/** @desc help text */"
         + "var MSG_SILLY = goog.getMsg('{$adjective} ' + 'message', "
@@ -505,10 +600,10 @@ public final class JsMessageVisitorTest {
     extractMessagesSafely("/** @desc text */ var MSG_FOO = goog.getMsg('');");
 
     assertThat(messages).hasSize(1);
-    assertThat(compiler.getWarnings()).hasSize(1);
-    assertThat(compiler.getWarnings().get(0).description)
-        .isEqualTo(
-            "Message value of MSG_FOO is just an empty string. " + "Empty messages are forbidden.");
+    assertThat(compiler.getWarnings())
+        .comparingElementsUsing(DESCRIPTION_EQUALITY)
+        .containsExactly(
+            "Message value of MSG_FOO is just an empty string. Empty messages are forbidden.");
   }
 
   @Test
@@ -517,9 +612,9 @@ public final class JsMessageVisitorTest {
         + "'' + '' + ''     + ''\n+'');");
 
     assertThat(messages).hasSize(1);
-    assertThat(compiler.getWarnings()).hasSize(1);
-    assertThat(compiler.getWarnings().get(0).description)
-        .isEqualTo(
+    assertThat(compiler.getWarnings())
+        .comparingElementsUsing(DESCRIPTION_EQUALITY)
+        .containsExactly(
             "Message value of MSG_BAR is just an empty string. " + "Empty messages are forbidden.");
   }
 
@@ -527,9 +622,9 @@ public final class JsMessageVisitorTest {
   public void testMsgVarWithoutAssignment() {
     extractMessages("var MSG_SILLY;");
 
-    assertThat(compiler.getErrors()).hasSize(1);
-    JSError error = compiler.getErrors().get(0);
-    assertThat(error.getType()).isEqualTo(JsMessageVisitor.MESSAGE_HAS_NO_VALUE);
+    assertThat(compiler.getErrors())
+        .comparingElementsUsing(DIAGNOSTIC_EQUALITY)
+        .containsExactly(JsMessageVisitor.MESSAGE_HAS_NO_VALUE);
   }
 
   @Test
@@ -544,19 +639,19 @@ public final class JsMessageVisitorTest {
   public void testMsgPropertyWithoutAssignment() {
     extractMessages("goog.message.MSG_SILLY_PROP;");
 
-    assertThat(compiler.getErrors()).hasSize(1);
-    JSError error = compiler.getErrors().get(0);
-    assertThat(error.description).isEqualTo("Message MSG_SILLY_PROP has no value");
+    assertThat(compiler.getErrors())
+        .comparingElementsUsing(DESCRIPTION_EQUALITY)
+        .containsExactly("Message MSG_SILLY_PROP has no value");
   }
 
   @Test
   public void testMsgVarWithIncorrectRightSide() {
     extractMessages("var MSG_SILLY = 0;");
 
-    assertThat(compiler.getErrors()).hasSize(1);
-    JSError error = compiler.getErrors().get(0);
-    assertThat(error.description)
-        .isEqualTo("Message parse tree malformed. Cannot parse value of " + "message MSG_SILLY");
+    assertThat(compiler.getErrors())
+        .comparingElementsUsing(DESCRIPTION_EQUALITY)
+        .containsExactly(
+            "Message parse tree malformed. Cannot parse value of " + "message MSG_SILLY");
   }
 
   @Test
@@ -564,10 +659,9 @@ public final class JsMessageVisitorTest {
     extractMessages("DP_DatePicker.MSG_DATE_SELECTION = {};");
 
     assertThat(messages).isEmpty();
-    assertThat(compiler.getErrors()).hasSize(1);
-    JSError error = compiler.getErrors().get(0);
-    assertThat(error.description)
-        .isEqualTo(
+    assertThat(compiler.getErrors())
+        .comparingElementsUsing(DESCRIPTION_EQUALITY)
+        .containsExactly(
             "Message parse tree malformed."
                 + " Message must be initialized using goog.getMsg function.");
   }
@@ -578,10 +672,9 @@ public final class JsMessageVisitorTest {
     extractMessages("DP_DatePicker.MSG_DATE_SELECTION = somefunc('a')");
 
     assertThat(messages).isEmpty();
-    assertThat(compiler.getErrors()).hasSize(1);
-    JSError error = compiler.getErrors().get(0);
-    assertThat(error.description)
-        .isEqualTo(
+    assertThat(compiler.getErrors())
+        .comparingElementsUsing(DESCRIPTION_EQUALITY)
+        .containsExactly(
             "Message parse tree malformed. Message initialized using unrecognized function. "
                 + "Please use goog.getMsg() instead.");
   }
@@ -699,7 +792,7 @@ public final class JsMessageVisitorTest {
     assertThat(errors).hasSize(1);
     JSError error = errors.get(0);
     assertThat(error.getType()).isEqualTo(JsMessageVisitor.MESSAGE_TREE_MALFORMED);
-    assertThat(error.description)
+    assertThat(error.getDescription())
         .isEqualTo(
             "Message parse tree malformed. Unrecognized message " + "placeholder referenced: foo");
   }
@@ -713,7 +806,7 @@ public final class JsMessageVisitorTest {
     assertThat(errors).hasSize(1);
     JSError error = errors.get(0);
     assertThat(error.getType()).isEqualTo(JsMessageVisitor.MESSAGE_TREE_MALFORMED);
-    assertThat(error.description)
+    assertThat(error.getDescription())
         .isEqualTo("Message parse tree malformed. Unused message placeholder: " + "foo");
   }
 
@@ -727,7 +820,7 @@ public final class JsMessageVisitorTest {
     assertThat(errors).hasSize(1);
     JSError error = errors.get(0);
     assertThat(error.getType()).isEqualTo(JsMessageVisitor.MESSAGE_TREE_MALFORMED);
-    assertThat(error.description)
+    assertThat(error.getDescription())
         .isEqualTo("Message parse tree malformed. Duplicate placeholder " + "name: foo");
   }
 
@@ -765,7 +858,7 @@ public final class JsMessageVisitorTest {
     assertThat(errors).hasSize(1);
     JSError error = errors.get(0);
     assertThat(error.getType()).isEqualTo(JsMessageVisitor.MESSAGE_TREE_MALFORMED);
-    assertThat(error.description)
+    assertThat(error.getDescription())
         .isEqualTo(
             "Message parse tree malformed. Placeholder name not in "
                 + "lowerCamelCase: slide_number");
@@ -848,6 +941,26 @@ public final class JsMessageVisitorTest {
   }
 
   @Test
+  public void testUsingMsgPrefixWithFallback_module() {
+    extractMessages(
+        LINE_JOINER.join(
+            "/** @desc Hello */ var MSG_A = goog.getMsg('hello');",
+            "/** @desc Hello */ var MSG_B = goog.getMsg('hello!');",
+            "var x = goog.getMsgWithFallback(messages.MSG_A, MSG_B);"));
+    assertNoErrors();
+  }
+
+  @Test
+  public void testUsingMsgPrefixWithFallback_moduleRenamed() {
+    extractMessages(
+        LINE_JOINER.join(
+            "/** @desc Hello */ var MSG_A = goog.getMsg('hello');",
+            "/** @desc Hello */ var MSG_B = goog.getMsg('hello!');",
+            "var x = goog.getMsgWithFallback(module$exports$messages$MSG_A, MSG_B);"));
+    assertNoErrors();
+  }
+
+  @Test
   public void testErrorWhenUsingMsgPrefixWithFallback() {
     extractMessages(
         "/** @desc Hello */ var MSG_HELLO_1 = goog.getMsg('hello');\n" +
@@ -885,13 +998,25 @@ public final class JsMessageVisitorTest {
     assertThat(msg.getDesc()).isEqualTo("a");
   }
 
+  @Test
+  public void testGetMsgWithHtml() {
+    extractMessagesSafely("/** @desc Hello */ var MSG_HELLO = goog.getMsg('a', {}, {html: true})");
+    assertThat(compiler.getWarnings()).isEmpty();
+    assertThat(messages).hasSize(1);
+
+    JsMessage msg = messages.get(0);
+    assertThat(msg.getKey()).isEqualTo("MSG_HELLO");
+    assertThat(msg.getDesc()).isEqualTo("Hello");
+  }
+
   private void assertNoErrors() {
     assertThat(compiler.getErrors()).isEmpty();
   }
 
   private void assertOneError(DiagnosticType type) {
-    assertThat(compiler.getErrors()).hasSize(1);
-    assertError(compiler.getErrors().get(0)).hasType(type);
+    assertThat(compiler.getErrors())
+        .comparingElementsUsing(DIAGNOSTIC_EQUALITY)
+        .containsExactly(type);
   }
 
   private void extractMessagesSafely(String input) {

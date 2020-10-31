@@ -22,8 +22,6 @@ import com.google.javascript.jscomp.CompilerOptions.Reach;
 /**
  * A CompilationLevel represents the level of optimization that should be
  * applied when compiling JavaScript code.
- *
- * @author bolinfest@google.com (Michael Bolin)
  */
 public enum CompilationLevel {
   /** BUNDLE Simply orders and concatenates files to the output. */
@@ -93,12 +91,9 @@ public enum CompilationLevel {
   }
 
   public void setDebugOptionsForCompilationLevel(CompilerOptions options) {
-    options.setAnonymousFunctionNaming(AnonymousFunctionNamingPolicy.UNMAPPED);
     options.generatePseudoNames = true;
     options.removeClosureAsserts = false;
     options.removeJ2clAsserts = false;
-    // Don't shadow variables as it is too confusing.
-    options.shadowVariables = false;
   }
 
   /**
@@ -126,11 +121,10 @@ public enum CompilationLevel {
     // skipAllCompilerPasses() cannot be easily undone.
     options.setClosurePass(true);
     options.setRenamingPolicy(VariableRenamingPolicy.LOCAL, PropertyRenamingPolicy.OFF);
-    options.shadowVariables = true;
     options.setInlineVariables(Reach.LOCAL_ONLY);
     options.setInlineFunctions(Reach.LOCAL_ONLY);
     options.setAssumeClosuresOnlyCaptureReferences(false);
-    options.setCheckGlobalThisLevel(CheckLevel.OFF);
+    options.setWarningLevel(DiagnosticGroups.GLOBAL_THIS, CheckLevel.OFF);
     options.setFoldConstants(true);
     options.setCoalesceVariableNames(true);
     options.setDeadAssignmentElimination(true);
@@ -178,16 +172,13 @@ public enum CompilationLevel {
     options.setRemoveAbstractMethods(true);
     options.setReserveRawExports(true);
     options.setRenamingPolicy(VariableRenamingPolicy.ALL, PropertyRenamingPolicy.ALL_UNQUOTED);
-    options.setShadowVariables(true);
     options.setRemoveUnusedPrototypeProperties(true);
-    options.setRemoveUnusedPrototypePropertiesInExterns(false);
     options.setRemoveUnusedClassProperties(true);
     options.setCollapseAnonymousFunctions(true);
     options.setCollapsePropertiesLevel(PropertyCollapseLevel.ALL);
-    options.setCheckGlobalThisLevel(CheckLevel.WARNING);
+    options.setWarningLevel(DiagnosticGroups.GLOBAL_THIS, CheckLevel.WARNING);
     options.setRewriteFunctionExpressions(false);
     options.setSmartNameRemoval(true);
-    options.setExtraSmartNameRemoval(true);
     options.setInlineConstantVars(true);
     options.setInlineFunctions(Reach.ALL);
     options.setAssumeClosuresOnlyCaptureReferences(false);
@@ -203,7 +194,7 @@ public enum CompilationLevel {
     options.setCrossChunkMethodMotion(true);
 
     // Call optimizations
-    options.setDevirtualizePrototypeMethods(true);
+    options.setDevirtualizeMethods(true);
     options.setOptimizeCalls(true);
   }
 

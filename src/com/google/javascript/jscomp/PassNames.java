@@ -30,6 +30,8 @@ public final class PassNames {
   public static final String BEFORE_MAIN_OPTIMIZATIONS = "beforeMainOptimizations";
   public static final String BEFORE_TYPE_CHECKING = "beforeTypeChecking";
   public static final String BEFORE_PRE_TYPECHECK_TRANSPILATION = "beforePreTypeCheckTranspilation";
+  public static final String BEFORE_SERIALIZATION = "beforeSerialization";
+  public static final String CHECK_CONFORMANCE = "checkConformance";
   public static final String CHECK_CONST_PARAMS = "checkConstParams";
   public static final String CHECK_REG_EXP = "checkRegExp";
   public static final String CHECK_TYPES = "checkTypes";
@@ -48,8 +50,7 @@ public final class PassNames {
   public static final String DEAD_ASSIGNMENT_ELIMINATION = "deadAssignmentsElimination";
   public static final String DECLARED_GLOBAL_EXTERNS_ON_WINDOW = "declaredGlobalExternsOnWindow";
   public static final String DESERIALIZE_COMPILER_STATE = "deserializeCompilerState";
-  public static final String DEVIRTUALIZE_PROTOTYPE_METHODS = "devirtualizePrototypeMethods";
-  public static final String DISAMBIGUATE_PRIVATE_PROPERTIES = "disambiguatePrivateProperties";
+  public static final String DEVIRTUALIZE_METHODS = "devirtualizeMethods";
   public static final String DISAMBIGUATE_PROPERTIES = "disambiguateProperties";
   public static final String ES6_EXTRACT_CLASSES = "Es6ExtractClasses";
   public static final String ES6_REWRITE_CLASS_EXTENDS = "Es6ExtractClassExtends";
@@ -70,9 +71,6 @@ public final class PassNames {
   public static final String INLINE_TYPE_ALIASES = "inlineTypeAliases";
   public static final String INLINE_VARIABLES = "inlineVariables";
   public static final String LINT_CHECKS = "lintChecks";
-  public static final String MARK_NO_SIDE_EFFECT_CALLS = "markNoSideEffectCalls";
-  public static final String MOVE_FUNCTION_DECLARATIONS = "moveFunctionDeclarations";
-  public static final String NAME_ANONYMOUS_FUNCTIONS = "nameAnonymousFunctions";
   public static final String NORMALIZE = "normalize";
   public static final String OPTIMIZE_ARGUMENTS_ARRAY = "optimizeArgumentsArray";
   public static final String OPTIMIZE_CALLS = "optimizeCalls";
@@ -81,9 +79,6 @@ public final class PassNames {
   public static final String REWRITE_COMMON_JS_MODULES = "rewriteCommonJsModules";
   public static final String REWRITE_SCRIPTS_TO_ES6_MODULES = "rewriteScriptsToEs6Modules";
   public static final String REMOVE_UNREACHABLE_CODE = "removeUnreachableCode";
-  public static final String REMOVE_UNUSED_CLASS_PROPERTIES = "removeUnusedClassProperties";
-  public static final String REMOVE_UNUSED_PROTOTYPE_PROPERTIES =
-      "removeUnusedPrototypeProperties";
   public static final String REMOVE_UNUSED_CODE = "removeUnusedCode";
   public static final String REPLACE_ID_GENERATORS = "replaceIdGenerators";
   public static final String REPLACE_MESSAGES = "replaceMessages";

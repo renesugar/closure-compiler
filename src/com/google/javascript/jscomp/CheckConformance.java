@@ -37,7 +37,6 @@ import java.util.Set;
  *
  * <p>Conformance violations are both reported as compiler errors, and are also reported separately
  * to the {cI gue@link ErrorManager}
- *
  */
 @GwtIncompatible("com.google.protobuf")
 public final class CheckConformance implements Callback, CompilerPass {
@@ -118,7 +117,13 @@ public final class CheckConformance implements Callback, CompilerPass {
 
   private static final ImmutableSet<String> EXTENDABLE_FIELDS =
       ImmutableSet.of(
-          "extends", "whitelist", "whitelist_regexp", "only_apply_to", "only_apply_to_regexp");
+          "config_file",
+          "extends",
+          "only_apply_to",
+          "only_apply_to_regexp",
+          "whitelist",
+          "whitelist_regexp",
+          "value");
 
   /**
    * Gets requirements from all configs. Merges whitelists of requirements with 'extends' equal to
@@ -164,11 +169,19 @@ public final class CheckConformance implements Callback, CompilerPass {
                   "extending rules allow only " + EXTENDABLE_FIELDS);
             }
           }
+          if (requirement.getValueCount() > 0 && !existing.getAllowExtendingValue()) {
+            reportInvalidRequirement(
+                compiler,
+                requirement,
+                "extending rule may not specify 'value' if base rule does not allow it");
+          }
           existing.addAllWhitelist(requirement.getWhitelistList());
           existing.addAllWhitelistRegexp(requirement.getWhitelistRegexpList());
           existing.addAllOnlyApplyTo(requirement.getOnlyApplyToList());
           existing.addAllOnlyApplyToRegexp(requirement.getOnlyApplyToRegexpList());
           existing.addAllWhitelistEntry(requirement.getWhitelistEntryList());
+          existing.addAllValue(requirement.getValueList());
+          existing.addAllConfigFile(requirement.getConfigFileList());
         }
       }
     }
@@ -205,10 +218,14 @@ public final class CheckConformance implements Callback, CompilerPass {
       switch (requirement.getType()) {
         case CUSTOM:
           return new ConformanceRules.CustomRuleProxy(compiler, requirement);
+        case NO_OP:
+          return new ConformanceRules.NoOp(compiler, requirement);
         case BANNED_CODE_PATTERN:
           return new ConformanceRules.BannedCodePattern(compiler, requirement);
         case BANNED_DEPENDENCY:
           return new ConformanceRules.BannedDependency(compiler, requirement);
+        case BANNED_DEPENDENCY_REGEX:
+          return new ConformanceRules.BannedDependencyRegex(compiler, requirement);
         case BANNED_NAME:
         case BANNED_NAME_CALL:
           return new ConformanceRules.BannedName(compiler, requirement);

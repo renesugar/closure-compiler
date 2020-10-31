@@ -20,8 +20,8 @@ import static com.google.javascript.rhino.jstype.JSTypeNative.ITERABLE_TYPE;
 import static com.google.javascript.rhino.jstype.JSTypeNative.UNKNOWN_TYPE;
 
 import com.google.javascript.rhino.jstype.JSType;
-import com.google.javascript.rhino.jstype.JSTypeNative;
 import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import com.google.javascript.rhino.jstype.TemplateType;
 import com.google.javascript.rhino.jstype.TemplateTypeMap;
 import java.util.ArrayList;
 import java.util.List;
@@ -50,15 +50,15 @@ final class JsIterables {
     if (templateTypeMap.hasTemplateKey(typeRegistry.getIterableTemplate())) {
       // `Iterable<SomeElementType>` or `Generator<SomeElementType>`
       return templateTypeMap.getResolvedTemplateType(typeRegistry.getIterableTemplate());
-    } else if (templateTypeMap.hasTemplateKey(typeRegistry.getIteratorTemplate())) {
+    } else if (templateTypeMap.hasTemplateKey(typeRegistry.getIteratorValueTemplate())) {
       // `Iterator<SomeElementType>`
-      return templateTypeMap.getResolvedTemplateType(typeRegistry.getIteratorTemplate());
+      return templateTypeMap.getResolvedTemplateType(typeRegistry.getIteratorValueTemplate());
     } else if (templateTypeMap.hasTemplateKey(typeRegistry.getAsyncIterableTemplate())) {
       // `AsyncIterable<SomeElementType>` or `AsyncGenerator<SomeElementType>`
       return templateTypeMap.getResolvedTemplateType(typeRegistry.getAsyncIterableTemplate());
-    } else if (templateTypeMap.hasTemplateKey(typeRegistry.getAsyncIteratorTemplate())) {
+    } else if (templateTypeMap.hasTemplateKey(typeRegistry.getAsyncIteratorValueTemplate())) {
       // `AsyncIterator<SomeElementType>`
-      return templateTypeMap.getResolvedTemplateType(typeRegistry.getAsyncIteratorTemplate());
+      return templateTypeMap.getResolvedTemplateType(typeRegistry.getAsyncIteratorValueTemplate());
     }
     return typeRegistry.getNativeType(UNKNOWN_TYPE);
   }
@@ -135,16 +135,18 @@ final class JsIterables {
     // Note: we don't just use JSType.autobox() here because that removes null and undefined.
     // We want to keep null and undefined around because they should cause a mismatch.
     if (type.isUnionType()) {
-      for (JSType alt : type.toMaybeUnionType().getAlternatesWithoutStructuralTyping()) {
+      for (JSType alt : type.toMaybeUnionType().getAlternates()) {
         alt = alt.isBoxableScalar() ? alt.autoboxesTo() : alt;
         boolean isIterable = alt.isSubtypeOf(typeRegistry.getNativeType(ITERABLE_TYPE));
         boolean isAsyncIterable = alt.isSubtypeOf(typeRegistry.getNativeType(ASYNC_ITERABLE_TYPE));
         if (!isIterable && !isAsyncIterable) {
           return new MaybeBoxedIterableOrAsyncIterable(null, alt);
         }
-        JSTypeNative iterableType = isAsyncIterable ? ASYNC_ITERABLE_TYPE : ITERABLE_TYPE;
-        templatedTypes.add(
-            alt.getInstantiatedTypeArgument(typeRegistry.getNativeType(iterableType)));
+        TemplateType valueTemplate =
+            isAsyncIterable
+                ? typeRegistry.getAsyncIterableTemplate()
+                : typeRegistry.getIterableTemplate();
+        templatedTypes.add(alt.getTemplateTypeMap().getResolvedTemplateType(valueTemplate));
       }
     } else {
       JSType autoboxedType = type.isBoxableScalar() ? type.autoboxesTo() : type;
@@ -154,9 +156,11 @@ final class JsIterables {
       if (!isIterable && !isAsyncIterable) {
         return new MaybeBoxedIterableOrAsyncIterable(null, autoboxedType);
       }
-      JSTypeNative iterableType = isAsyncIterable ? ASYNC_ITERABLE_TYPE : ITERABLE_TYPE;
-      templatedTypes.add(
-          autoboxedType.getInstantiatedTypeArgument(typeRegistry.getNativeType(iterableType)));
+      TemplateType templateType =
+          isAsyncIterable
+              ? typeRegistry.getAsyncIterableTemplate()
+              : typeRegistry.getIterableTemplate();
+      templatedTypes.add(autoboxedType.getTemplateTypeMap().getResolvedTemplateType(templateType));
     }
     return new MaybeBoxedIterableOrAsyncIterable(
         typeRegistry.createUnionType(templatedTypes), null);

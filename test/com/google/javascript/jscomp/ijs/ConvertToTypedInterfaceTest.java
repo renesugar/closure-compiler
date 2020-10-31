@@ -51,11 +51,6 @@ public final class ConvertToTypedInterfaceTest extends CompilerTestCase {
     return options;
   }
 
-  @Override
-  protected int getNumRepetitions() {
-    return 1;
-  }
-
   @Test
   public void testInferAnnotatedTypeFromTypeInference() {
     test("/** @const */ var x = 5;", "/** @const {number} */ var x;");
@@ -77,7 +72,9 @@ public final class ConvertToTypedInterfaceTest extends CompilerTestCase {
 
   @Test
   public void testSimpleConstJsdocPropagation() {
+    setAcceptedLanguage(LanguageMode.UNSUPPORTED);
     test("/** @const */ var x = 5;", "/** @const {number} */ var x;");
+    test("/** @const */ var x = 5n;", "/** @const {bigint} */ var x;");
     test("/** @const */ var x = true;", "/** @const {boolean} */ var x;");
     test("/** @const */ var x = 'str';", "/** @const {string} */ var x;");
     test("/** @const */ var x = `str`;", "/** @const {string} */ var x;");
@@ -471,6 +468,25 @@ public final class ConvertToTypedInterfaceTest extends CompilerTestCase {
   }
 
   @Test
+  public void testRequireAlias5() {
+    test(
+        lines(
+            "goog.module('FooAlias');",
+            "",
+            "const {Foo} = goog.require('a.b.c');",
+            "/** @const {number} */",
+            "Foo = 1;",
+            "",
+            "exports = Foo;"),
+        lines(
+            "goog.module('FooAlias');",
+            "",
+            "/** @const @type {number} */ var Foo;",
+            "",
+            "exports = Foo;"));
+  }
+
+  @Test
   public void testRequireTypeAlias1() {
     testSame(
         lines(
@@ -514,6 +530,143 @@ public final class ConvertToTypedInterfaceTest extends CompilerTestCase {
             "const {Foo} = goog.requireType('a.b.c');",
             "",
             "exports = Foo;"));
+  }
+
+  @Test
+  public void testRequireTypeAlias5() {
+    test(
+        lines(
+            "goog.module('FooAlias');",
+            "",
+            "const {Foo, Bar} = goog.requireType('a.b.c');",
+            "/** @const {string} */",
+            "Foo = 'foo';",
+            "",
+            "exports = Foo;"),
+        lines(
+            "goog.module('FooAlias');",
+            "",
+            "const {Bar} = goog.requireType('a.b.c');",
+            "/** @const @type {string} */ var Foo;",
+            "",
+            "exports = Foo;"));
+  }
+
+  @Test
+  public void testDestructuredAlias1() {
+    testSame("const {Foo} = a.b.c; const {Bar} = x; exports = Foo;");
+  }
+
+  @Test
+  public void testDestructuredAlias2() {
+    testSame("const {Foo, Bar} = a.b.c;  exports = Foo;");
+  }
+
+  @Test
+  public void testDestructuredAlias3() {
+    test(
+        lines("const {Foo} = a.b.c, bar = 1;", "exports = Foo;"),
+        lines(
+            "const {Foo} = a.b.c;",
+            "",
+            "/** @const @type {number} */ var bar;",
+            "",
+            "exports = Foo;"));
+  }
+
+  @Test
+  public void testDestructuredAlias4() {
+    test(
+        "const {Foo} = a.b.c, Baz = p.q.Baz; exports = Foo;",
+        "const {Foo} = a.b.c; const Baz = p.q.Baz; exports = Foo;");
+  }
+
+  @Test
+  public void testDuplicateDeclarationWAliasRemoved1() {
+    test(
+        lines(
+            "const {Foo, Bar} = x.y;", //
+            "/** @const {number} */",
+            "Bar = 1;",
+            "",
+            "exports = Foo;"),
+        lines(
+            "const {Foo} = x.y",
+            "",
+            "/** @const @type {number} */ var Bar;",
+            "",
+            "exports = Foo;"));
+  }
+
+  @Test
+  public void testDuplicateDeclarationWAliasRemoved2() {
+    test(
+        lines(
+            "/** @const {string} */",
+            "Foo = 'hello';",
+            "",
+            "const {Foo, Bar} = x.y;",
+            "",
+            "/** @const {number} */",
+            "Bar = 1;",
+            "",
+            "exports = Foo;"),
+        lines(
+            "/** @const @type {string} */ var Foo;",
+            "",
+            "/** @const @type {number} */ var Bar;",
+            "",
+            "exports = Foo;"));
+  }
+
+  @Test
+  public void testDuplicateDeclarationWAliasRemoved3() {
+    test(
+        lines(
+            "/** @const {string} */",
+            "Foo = 'hello';",
+            "",
+            "const {Foo, Bar, Baz} = x.y;",
+            "",
+            "/** @const {number} */",
+            "Baz = 1;",
+            "",
+            "exports = Foo;"),
+        lines(
+            "/** @const @type {string} */ var Foo;",
+            "",
+            "const {Bar} = x.y;",
+            "",
+            "/** @const @type {number} */ var Baz;",
+            "",
+            "exports = Foo;"));
+  }
+
+  @Test
+  public void testDuplicateDeclarationWAliasNotRemoved() {
+    test(
+        lines(
+            "const {Foo, Bar} = x.y;", //
+            "",
+            "Bar = z;",
+            "",
+            "exports = Foo;"),
+        lines(
+            "const {Foo, Bar} = x.y;", //
+            "",
+            "exports = Foo;"));
+  }
+
+  @Test
+  public void testLetDestructuringDeclarationsRemoved() {
+    test("let {Foo, Bar} = a.b.c; exports = Foo;", "exports = Foo;");
+  }
+
+  @Test
+  public void testAtConstAnnotationAlias() {
+    test(
+        "/** @const */ var x = a.b.c; var y = x;",
+        "/** @const */ var x = a.b.c; /** @const @type {UnusableType} */ var y;");
   }
 
   @Test
@@ -792,13 +945,6 @@ public final class ConvertToTypedInterfaceTest extends CompilerTestCase {
   @Test
   public void testEs6ModulesDeclareModuleId() {
     testSame(lines("goog.declareModuleId('foo');", "/** @type {number} */ export var x;"));
-  }
-
-  @Test
-  public void testEs6ModulesDeclareNamespace() {
-    testSame(
-        lines(
-            "goog.module.declareNamespace('foo');", "/** @type {number} */ export var x;"));
   }
 
   @Test
@@ -1588,6 +1734,8 @@ public final class ConvertToTypedInterfaceTest extends CompilerTestCase {
             "const Enum = goog.require('Enum');",
             "const Foo = goog.require('Foo');",
             "",
+            "const {A, B} = Enum;",
+            "",
             "/** @type {Foo} */",
             "exports.foo;",
             ""));
@@ -1798,5 +1946,103 @@ public final class ConvertToTypedInterfaceTest extends CompilerTestCase {
             "goog.module('fooo');",
             "/** @const @type {UnusableType} */ var Foo;",
             "/** @const @type {UnusableType} */ var Bar"));
+  }
+
+  @Test
+  public void testPolymerBehavior() {
+    test(
+        lines(
+            "/** @polymerBehavior */",
+            "export const MyBehavior = {",
+            "  properties: {",
+            "    foo: String,",
+            "    /** @type {string|number} */",
+            "    bar: Number,",
+            "    /** @type {string|number} */",
+            "    baz: {",
+            "      type: String,",
+            "      value: function() {",
+            "        return \"foo\";",
+            "      },",
+            "      reflectToAttribute: true,",
+            "      observer: \"bazChanged\"",
+            "    }",
+            "  },",
+            "  observers: [",
+            "    \"abc(foo)\",",
+            "  ],",
+            "  /** @return {boolean} */",
+            "  abc() { return true; },",
+            "  /** @return {boolean} */",
+            "  xyz: function() { return false; }",
+            "};",
+            "/** @polymerBehavior */",
+            "export const MyBehaviorAlias = MyBehavior;",
+            "/** @polymerBehavior */",
+            "export const MyBehaviorArray = [MyBehavior];",
+            "/** @polymerBehavior */",
+            "exports.MyBehaviorAlias = MyBehavior;",
+            "/** @polymerBehavior */",
+            "exports.MyBehaviorArray = [MyBehavior];",
+            "/** @polymerBehavior */",
+            "export let InvalidBehavior1 = \"foo\";",
+            "/** @polymerBehavior */",
+            "exports.InvalidBehavior2 = function() { return \"foo\" };",
+            "export const NotABehavior = {",
+            "  properties: {",
+            "    foo: String",
+            "  }",
+            "};"),
+        lines(
+            // The @polymerBehavior annotation matters.
+            "/** @polymerBehavior */",
+            "export const MyBehavior = {",
+            // The "properties" configuration matters.
+            "  properties: {",
+            "    foo: String,",
+            // @type annotations on the properties matter.
+            "    /** @type {string|number} */",
+            "    bar: Number,",
+            "    /** @type {string|number} */",
+            "    baz: {",
+            // If the property definition is an object, only the "type" sub-property matters.
+            "      type: String",
+            "    }",
+            "  },",
+            // The "observers" configuration doesn't matter.
+            "  /** @const @type {UnusableType} */",
+            "  observers: 0,",
+            // Methods matter, but only their signatures.
+            "  /** @return {boolean} */",
+            "  abc() {},",
+            "  /** @return {boolean} */",
+            "  xyz: function() {}",
+            "};",
+
+            // Behaviors can also be aliased or combined into arrays, and the RHS values matter.
+            "/** @polymerBehavior */",
+            "export const MyBehaviorAlias = MyBehavior;",
+            "/** @polymerBehavior */",
+            "export const MyBehaviorArray = [MyBehavior];",
+            "/** @polymerBehavior */",
+            "exports.MyBehaviorAlias = MyBehavior;",
+            "/** @polymerBehavior */",
+            "exports.MyBehaviorArray = [MyBehavior];",
+
+            // Not valid behavior types, can be simplified.
+            "/**",
+            " * @const",
+            " * @polymerBehavior",
+            " * @type {UnusableType}",
+            " */",
+            "export var InvalidBehavior1",
+            "/** @polymerBehavior */",
+            "exports.InvalidBehavior2 = function() {};",
+
+            // There's no @polymerBehavior annotation here, so don't preserve "properties".
+            "export const NotABehavior = {",
+            "  /** @const @type {UnusableType} */",
+            "  properties: 0",
+            "};"));
   }
 }

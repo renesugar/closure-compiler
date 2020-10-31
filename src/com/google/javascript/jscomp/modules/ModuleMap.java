@@ -46,8 +46,20 @@ public final class ModuleMap {
     return getModule(path.toModuleName());
   }
 
+  public ImmutableMap<String, Module> getModulesByPath() {
+    return resolvedModules;
+  }
+
+  public ImmutableMap<String, Module> getModulesByClosureNamespace() {
+    return resolvedClosureModules;
+  }
+
   @Nullable
   public Module getClosureModule(String namespace) {
     return resolvedClosureModules.get(namespace);
+  }
+
+  public static ModuleMap emptyForTesting() {
+    return new ModuleMap(ImmutableMap.of(), ImmutableMap.of());
   }
 }

@@ -31,10 +31,10 @@ import com.google.javascript.rhino.jstype.StaticTypedSlot;
 /**
  * A flow scope that tries to store as little symbol information as possible,
  * instead delegating to its parents. Optimized for low memory use.
- *
- * @author nicksantos@google.com (Nick Santos)
  */
 class LinkedFlowScope implements FlowScope {
+
+  private final CompilerInputProvider inputProvider;
 
   // Map from TypedScope to OverlayScope.
   private final PMap<TypedScope, OverlayScope> scopes;
@@ -50,9 +50,11 @@ class LinkedFlowScope implements FlowScope {
    * scope with more than one direct parent. The parent is non-null only in the second case.
    */
   private LinkedFlowScope(
+      CompilerInputProvider inputProvider,
       PMap<TypedScope, OverlayScope> scopes,
       TypedScope syntacticScope,
       TypedScope functionScope) {
+    this.inputProvider = inputProvider;
     this.scopes = scopes;
     this.syntacticScope = syntacticScope;
     this.functionScope = functionScope;
@@ -92,22 +94,22 @@ class LinkedFlowScope implements FlowScope {
     return functionScope.isBottom();
   }
 
-  /**
-   * Creates an entry lattice for the flow.
-   */
-  public static LinkedFlowScope createEntryLattice(TypedScope scope) {
-    return new LinkedFlowScope(HamtPMap.<TypedScope, OverlayScope>empty(), scope, scope);
+  /** Creates an entry lattice for the flow. */
+  public static LinkedFlowScope createEntryLattice(
+      CompilerInputProvider inputProvider, TypedScope scope) {
+    return new LinkedFlowScope(
+        inputProvider, HamtPMap.<TypedScope, OverlayScope>empty(), scope, scope);
   }
 
   @Override
   public LinkedFlowScope inferSlotType(String symbol, JSType type) {
-    OverlayScope scope = getOverlayScopeForVar(symbol, true);
+    OverlayScope scope = getOverlayScopeForName(symbol, true);
     OverlayScope newScope = scope.infer(symbol, type);
     // Aggressively remove empty scopes to maintain a reasonable equivalence.
     PMap<TypedScope, OverlayScope> newScopes =
         !newScope.slots.isEmpty() ? scopes.plus(scope.scope, newScope) : scopes.minus(scope.scope);
     return newScopes != scopes
-        ? new LinkedFlowScope(newScopes, syntacticScope, functionScope)
+        ? new LinkedFlowScope(inputProvider, newScopes, syntacticScope, functionScope)
         : this;
   }
 
@@ -129,11 +131,17 @@ class LinkedFlowScope implements FlowScope {
       // nested block scope that is ignored when branches are joined; functionScope
       // is also wrong because it could lead to ambiguity if the same root name is
       // declared in multiple different blocks.  Instead, the qualified name is declared
-      // on the scope that owns the root, when possible.
+      // on the scope that owns the root, when possible. When the root is undeclared, the qualified
+      // name is declared in the global scope, as only global variables can be undeclared.
       TypedVar rootVar = syntacticScope.getVar(getRootOfQualifiedName(symbol));
-      TypedScope rootScope =
-          rootVar != null ? rootVar.getScope() : syntacticScope.getClosestHoistScope();
-      v = rootScope.declare(symbol, node, bottomType, null, !declared);
+      TypedScope rootScope = rootVar != null ? rootVar.getScope() : syntacticScope.getGlobalScope();
+      v =
+          rootScope.declare(
+              symbol,
+              node,
+              bottomType,
+              inputProvider.getInput(NodeUtil.getInputId(node)),
+              !declared);
     }
 
     JSType declaredType = v != null ? v.getType() : null;
@@ -144,7 +152,7 @@ class LinkedFlowScope implements FlowScope {
         if (declaredType == null
             || !inferredType.isSubtypeOf(declaredType)
             || declaredType.isSubtypeOf(inferredType)
-            || inferredType.isEquivalentTo(declaredType)) {
+            || inferredType.equals(declaredType)) {
           return this;
         }
       } else if (declaredType != null && !inferredType.isSubtypeOf(declaredType)) {
@@ -174,8 +182,13 @@ class LinkedFlowScope implements FlowScope {
   /** Get the slot for the given symbol. */
   @Override
   public StaticTypedSlot getSlot(String name) {
-    OverlayScope scope = getOverlayScopeForVar(name, false);
-    return scope != null ? scope.getSlot(name) : syntacticScope.getSlot(name);
+    TypedVar var = syntacticScope.getVar(name);
+    OverlayScope scope =
+        var == null
+            ? getOverlayScopeForName(name, false)
+            : getOverlayScopeForScope(var.getScope(), false);
+
+    return scope != null ? scope.getSlot(name) : var;
   }
 
   private static String getRootOfQualifiedName(String name) {
@@ -183,14 +196,28 @@ class LinkedFlowScope implements FlowScope {
     return index < 0 ? name : name.substring(0, index);
   }
 
-  private OverlayScope getOverlayScopeForVar(String name, boolean create) {
-    TypedVar v = syntacticScope.getVar(name);
-    TypedScope scope = v != null ? v.getScope() : null;
-    if (scope == null) {
-      TypedVar rootVar = syntacticScope.getVar(getRootOfQualifiedName(name));
-      scope = rootVar != null ? rootVar.getScope() : null;
-      scope = scope != null ? scope : functionScope;
-    }
+  /**
+   * Returns the overlay scope corresponding to this qualified name
+   *
+   * @param create whether to create a new OverlayScope if one does not already exist.
+   */
+  private OverlayScope getOverlayScopeForName(String name, boolean create) {
+    TypedVar rootVar = syntacticScope.getVar(getRootOfQualifiedName(name));
+    TypedScope scope = rootVar != null ? rootVar.getScope() : null;
+    scope = scope != null ? scope : functionScope;
+    return getOverlayScopeForScope(scope, create);
+  }
+
+  /**
+   * Returns the overlay scope corresponding to this syntactic scope.
+   *
+   * <p>Use instead of {@link #getOverlayScopeForName(String, boolean)} if you already know the
+   * correct scope in order to avoid a variable lookup.
+   *
+   * @param scope the syntactic scope
+   * @param create whether to create a new OverlayScope if one does not already exist.
+   */
+  private OverlayScope getOverlayScopeForScope(TypedScope scope, boolean create) {
     OverlayScope overlay = scopes.get(scope);
     if (overlay == null && create) {
       overlay = new OverlayScope(scope);
@@ -207,7 +234,7 @@ class LinkedFlowScope implements FlowScope {
   public FlowScope withSyntacticScope(StaticTypedScope scope) {
     TypedScope typedScope = (TypedScope) scope;
     return scope != syntacticScope
-        ? new LinkedFlowScope(trimScopes(typedScope), typedScope, functionScope)
+        ? new LinkedFlowScope(inputProvider, trimScopes(typedScope), typedScope, functionScope)
         : this;
   }
 
@@ -218,6 +245,12 @@ class LinkedFlowScope implements FlowScope {
 
   /** Join the two FlowScopes. */
   static class FlowScopeJoinOp extends JoinOp.BinaryJoinOp<FlowScope> {
+    final CompilerInputProvider inputProvider;
+
+    FlowScopeJoinOp(CompilerInputProvider inputProvider) {
+      this.inputProvider = inputProvider;
+    }
+
     // NOTE(sdh): When joining flow scopes with different syntactic scopes,
     // we do not attempt to recover the correct syntactic scope.  This is
     // okay because joins only occur in two situations: (1) performed by
@@ -254,6 +287,7 @@ class LinkedFlowScope implements FlowScope {
       // adding irrelevant block-local variables to the joined scope unnecessarily.
       TypedScope common = getCommonParentDeclarationScope(linkedA, linkedB);
       return new LinkedFlowScope(
+          inputProvider,
           join(linkedA, linkedB, common),
           common,
           linkedA.flowsFromBottom() ? linkedB.functionScope : linkedA.functionScope);
@@ -315,7 +349,7 @@ class LinkedFlowScope implements FlowScope {
         .trimScopes(commonParent)
         .reconcile(
             linkedB.trimScopes(commonParent),
-            (scopeA, scopeB) -> {
+            (scopeKey, scopeA, scopeB) -> {
               PMap<String, OverlaySlot> slotsA = scopeA != null ? scopeA.slots : EMPTY_SLOTS;
               PMap<String, OverlaySlot> slotsB = scopeB != null ? scopeB.slots : EMPTY_SLOTS;
               // TODO(sdh): Simplify this logic: we want the best non-bottom scope we can get,
@@ -332,7 +366,7 @@ class LinkedFlowScope implements FlowScope {
                   bestScope,
                   slotsA.reconcile(
                       slotsB,
-                      (slotA, slotB) -> {
+                      (slotKey, slotA, slotB) -> {
                         // There are 5 different join cases:
                         // 1) The type is present in joinedScopeA, not in joinedScopeB,
                         //    and not in functionScope. Just use the one in A.

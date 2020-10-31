@@ -225,9 +225,8 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
   private void pullDestructuringOutOfParams(Node paramList, Node function) {
     Node insertSpot = null;
     Node body = function.getLastChild();
-    int i = 0;
     Node next = null;
-    for (Node param = paramList.getFirstChild(); param != null; param = next, i++) {
+    for (Node param = paramList.getFirstChild(); param != null; param = next) {
       next = param.getNext();
       if (param.isDefaultValue()) {
         Node nameOrPattern = param.removeFirstChild();
@@ -271,7 +270,6 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
         }
 
         paramList.replaceChild(param, newParam);
-        newParam.setOptionalArg(true);
         newParam.setJSDocInfo(jsDoc);
 
         compiler.reportChangeToChangeScope(function);
@@ -308,6 +306,7 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
     newParam.setJSDocInfo(patternParam.getJSDocInfo());
     patternParam.replaceWith(newParam);
     Node newDecl = IR.var(patternParam, astFactory.createName(tempVarName, paramType));
+    newDecl.useSourceInfoIfMissingFromForTree(patternParam);
     function.getLastChild().addChildAfter(newDecl, insertSpot);
     return newDecl;
   }
@@ -427,11 +426,7 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
           newRHS = defaultValueHook(getprop, defaultValue);
         }
         if (propsToDeleteForRest != null) {
-          Node propName = astFactory.createString(child.getString());
-          if (child.isQuotedString()) {
-            propName.setQuotedString();
-          }
-          propsToDeleteForRest.add(propName);
+          propsToDeleteForRest.add(child);
         }
       } else if (child.isComputedProp()) {
         // const {[propExpr]: newLHS = defaultValue} = newRHS;
@@ -485,7 +480,7 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
         }
         // TODO(b/116532470): see if casting this to a more specific type fixes disambiguation
         Node assignCall = astFactory.createCall(astFactory.createQName(scope, "Object.assign"));
-        assignCall.addChildToBack(astFactory.createEmptyObjectLit());
+        assignCall.addChildToBack(astFactory.createObjectLit());
         assignCall.addChildToBack(astFactory.createName(tempVarName, tempVarType));
 
         Node restTempDecl = IR.var(astFactory.createName(restTempVarName, tempVarType), assignCall);
@@ -562,11 +557,25 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
   }
 
   private Node deletionNodeForRestProperty(Node restTempVarNameNode, Node property) {
-    boolean useSquareBrackets = !property.isString() || property.isQuotedString();
-    Node get =
-        useSquareBrackets
-            ? astFactory.createGetElem(restTempVarNameNode, property)
-            : astFactory.createGetProp(restTempVarNameNode, property.getString());
+    final Node get;
+    switch (property.getToken()) {
+      case STRING_KEY:
+        get =
+            property.isQuotedString()
+                ? astFactory.createGetElem(
+                    restTempVarNameNode, astFactory.createString(property.getString()))
+                : astFactory.createGetProp(restTempVarNameNode, property.getString());
+        break;
+
+      case NAME:
+        get = astFactory.createGetElem(restTempVarNameNode, property);
+        break;
+
+      default:
+        throw new IllegalStateException(
+            "Unexpected property to delete node: " + property.toStringTree());
+    }
+
     return astFactory.createDelProp(get);
   }
 
@@ -627,7 +636,7 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
         nodeToDetach.getParent().addChildBefore(var, nodeToDetach);
 
         // `x`
-        newLHS = child.getFirstChild().detach();
+        newLHS = child.removeFirstChild();
         // `(temp1 === undefined) ? defaultValue : temp1;
         newRHS =
             defaultValueHook(
@@ -637,7 +646,7 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
         // becomes
         //   var temp = $jscomp.makeIterator(rhs);
         //   x = $jscomp.arrayFromIterator(temp);
-        newLHS = child.getFirstChild().detach();
+        newLHS = child.removeFirstChild();
         newRHS =
             astFactory.createJscompArrayFromIteratorCall(tempVarModel.cloneNode(), t.getScope());
       } else {
@@ -684,10 +693,10 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
     Node rhs = assignment.getLastChild().detach();
     // let temp0 = rhs;
     Node newAssignment = IR.let(tempVarModel.cloneNode(), rhs);
-    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS);
+    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS, compiler);
     // [x, y] = temp0;
     Node replacementExpr =
-        astFactory.createAssign(assignment.getFirstChild().detach(), tempVarModel.cloneNode());
+        astFactory.createAssign(assignment.removeFirstChild(), tempVarModel.cloneNode());
     Node exprResult = IR.exprResult(replacementExpr);
     // return temp0;
     Node returnNode = IR.returnNode(tempVarModel.cloneNode());
@@ -699,10 +708,10 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
 
     // Create a call to the function, and replace the pattern with the call.
     Node call = astFactory.createCall(arrowFn);
-    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.ARROW_FUNCTIONS);
+    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.ARROW_FUNCTIONS, compiler);
     call.useSourceInfoIfMissingFromForTree(assignment);
     call.putBooleanProp(Node.FREE_CALL, true);
-    assignment.getParent().replaceChild(assignment, call);
+    assignment.replaceWith(call);
     NodeUtil.markNewScopesChanged(call, compiler);
     replacePattern(
         t,
@@ -763,7 +772,7 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
     catchBlock.addChildToFront(
         IR.declaration(
             pattern, astFactory.createName(tempVarName, pattern.getJSType()), Token.LET));
-    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS);
+    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS, compiler);
   }
 
   /** Helper for transpiling DEFAULT_VALUE trees. */

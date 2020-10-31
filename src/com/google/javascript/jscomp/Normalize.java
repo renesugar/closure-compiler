@@ -57,11 +57,9 @@ import java.util.Set;
  *   <li>Marks constants with the IS_CONSTANT_NAME annotation.
  *   <li>Finds properties marked @expose, and rewrites them in [] notation.
  *   <li>Rewrite body of arrow function as a block.
- *   <li>Take var statements out from for-loop initializer.
- *       This: for(var a = 0;a<0;a++) {} becomes: var a = 0; for(var a;a<0;a++) {}
+ *   <li>Take var statements out from for-loop initializer. This: for(var a = 0;a<0;a++) {} becomes:
+ *       var a = 0; for(a;a<0;a++) {}
  * </ol>
- *
- * @author johnlenz@google.com (johnlenz)
  */
 class Normalize implements CompilerPass {
 
@@ -71,13 +69,9 @@ class Normalize implements CompilerPass {
   Normalize(AbstractCompiler compiler, boolean assertOnChange) {
     this.compiler = compiler;
     this.assertOnChange = assertOnChange;
-
-    // TODO(nicksantos): assertOnChange should only be true if the tree
-    // is normalized.
   }
 
-  static void normalizeSyntheticCode(
-      AbstractCompiler compiler, Node js, String prefix) {
+  static void normalizeSyntheticCode(AbstractCompiler compiler, Node js, String prefix) {
     NodeTraversal.traverse(compiler, js,
         new Normalize.NormalizeStatements(compiler, false));
     NodeTraversal.traverse(
@@ -108,12 +102,14 @@ class Normalize implements CompilerPass {
 
   @Override
   public void process(Node externs, Node root) {
-    NodeTraversal.traverse(compiler, root, new RemoveEmptyClassMembers());
-    NodeTraversal.traverseRoots(
-        compiler, new NormalizeStatements(compiler, assertOnChange), externs, root);
-    removeDuplicateDeclarations(externs, root);
     MakeDeclaredNamesUnique renamer = new MakeDeclaredNamesUnique();
     NodeTraversal.traverseRoots(compiler, renamer, externs, root);
+
+    NodeTraversal.traverseRoots(
+        compiler, new NormalizeStatements(compiler, assertOnChange), externs, root);
+
+    removeDuplicateDeclarations(externs, root);
+
     new PropagateConstantAnnotationsOverVars(compiler, assertOnChange)
         .process(externs, root);
 
@@ -127,16 +123,6 @@ class Normalize implements CompilerPass {
 
     if (!compiler.getLifeCycleStage().isNormalized()) {
       compiler.setLifeCycleStage(LifeCycleStage.NORMALIZED);
-    }
-  }
-
-  private class RemoveEmptyClassMembers extends AbstractPostOrderCallback {
-    @Override
-    public void visit(NodeTraversal t, Node n, Node parent) {
-      if (n.isEmpty() && parent.isClassMembers()) {
-        reportCodeChange("empty member in class", n);
-        n.detach();
-      }
     }
   }
 
@@ -417,10 +403,11 @@ class Normalize implements CompilerPass {
       }
 
       // There are only two cases where a string token
-      // may be a variable reference: The right side of a GETPROP
+      // may be a variable reference: The right side of a GETPROP (or OPTCHAIN_GETPROP)
       // or an OBJECTLIT key.
       boolean isObjLitKey = NodeUtil.mayBeObjectLitKey(n);
-      boolean isProperty = isObjLitKey || (parent.isGetProp() && parent.getLastChild() == n);
+      boolean isProperty =
+          isObjLitKey || (NodeUtil.isNormalOrOptChainGetProp(parent) && parent.getLastChild() == n);
       if (n.isName() || isProperty) {
         boolean isMarkedConstant = n.getBooleanProp(Node.IS_CONSTANT_NAME);
         if (!isMarkedConstant
@@ -496,10 +483,7 @@ class Normalize implements CompilerPass {
      */
     static boolean visitFunction(Node n, AbstractCompiler compiler) {
       checkState(n.isFunction(), n);
-      if (NodeUtil.isFunctionDeclaration(n) && !NodeUtil.isHoistedFunctionDeclaration(n)) {
-        rewriteFunctionDeclaration(n, compiler);
-        return true;
-      } else if (n.isFunction() && !NodeUtil.getFunctionBody(n).isBlock()) {
+      if (n.isFunction() && !NodeUtil.getFunctionBody(n).isBlock()) {
         Node returnValue = NodeUtil.getFunctionBody(n);
         Node body = IR.block(IR.returnNode(returnValue.detach()));
         body.useSourceInfoIfMissingFromForTree(returnValue);
@@ -507,40 +491,6 @@ class Normalize implements CompilerPass {
         compiler.reportChangeToEnclosingScope(body);
       }
       return false;
-    }
-
-    /**
-     * Rewrite the function declaration from:
-     *   function x() {}
-     *   FUNCTION
-     *     NAME x
-     *     PARAM_LIST
-     *     BLOCK
-     * to:
-     *   var x = function() {};
-     *   VAR
-     *     NAME x
-     *       FUNCTION
-     *         NAME (w/ empty string)
-     *         PARAM_LIST
-     *         BLOCK
-     */
-    private static void rewriteFunctionDeclaration(Node n, AbstractCompiler compiler) {
-      // Prepare a spot for the function.
-      Node oldNameNode = n.getFirstChild();
-      Node fnNameNode = oldNameNode.cloneNode();
-      Node var = IR.var(fnNameNode).srcref(n);
-
-      // Prepare the function
-      oldNameNode.setString("");
-      compiler.reportChangeToEnclosingScope(oldNameNode);
-
-      // Move the function to the front of the parent
-      Node parent = n.getParent();
-      parent.removeChild(n);
-      parent.addChildToFront(var);
-      compiler.reportChangeToEnclosingScope(var);
-      fnNameNode.addChildToFront(n);
     }
 
     /**
@@ -793,16 +743,14 @@ class Normalize implements CompilerPass {
   private void removeDuplicateDeclarations(Node externs, Node root) {
     Callback tickler = new ScopeTicklingCallback();
     ScopeCreator scopeCreator =
-        new Es6SyntacticScopeCreator(compiler, new DuplicateDeclarationHandler());
+        new SyntacticScopeCreator(compiler, new DuplicateDeclarationHandler());
     NodeTraversal t = new NodeTraversal(compiler, tickler, scopeCreator);
     t.traverseRoots(externs, root);
   }
 
-  /**
-   * ScopeCreator duplicate declaration handler.
-   */
-  private final class DuplicateDeclarationHandler implements
-      Es6SyntacticScopeCreator.RedeclarationHandler {
+  /** ScopeCreator duplicate declaration handler. */
+  private final class DuplicateDeclarationHandler
+      implements SyntacticScopeCreator.RedeclarationHandler {
 
     private final Set<Var> hasOkDuplicateDeclaration = new HashSet<>();
 
@@ -830,7 +778,7 @@ class Normalize implements CompilerPass {
       if (parent.isFunction()) {
         if (v.getParentNode().isVar()) {
           s.undeclare(v);
-          s.declare(name, n, v.input);
+          s.declare(name, n, v.getInput());
           replaceVarWithAssignment(v.getNameNode(), v.getParentNode(),
               v.getParentNode().getParent());
         }

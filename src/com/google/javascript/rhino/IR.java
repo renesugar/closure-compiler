@@ -41,6 +41,8 @@ package com.google.javascript.rhino;
 import static com.google.common.base.Preconditions.checkState;
 
 import com.google.common.base.Preconditions;
+import java.math.BigInteger;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -89,19 +91,10 @@ public class IR {
     return func;
   }
 
-  public static Node paramList() {
-    return new Node(Token.PARAM_LIST);
-  }
-
-  public static Node paramList(Node param) {
-    checkState(param.isName() || param.isRest());
-    return new Node(Token.PARAM_LIST, param);
-  }
-
   public static Node paramList(Node... params) {
-    Node paramList = paramList();
+    Node paramList = new Node(Token.PARAM_LIST);
     for (Node param : params) {
-      checkState(param.isName() || param.isRest());
+      checkState(param.isName() || param.isRest() || param.isDefaultValue());
       paramList.addChildToBack(param);
     }
     return paramList;
@@ -183,6 +176,10 @@ public class IR {
 
   public static Node let(Node lhs, Node value) {
     return declaration(lhs, value, Token.LET);
+  }
+
+  public static Node let(Node lhs) {
+    return declaration(lhs, Token.LET);
   }
 
   public static Node constNode(Node lhs, Node value) {
@@ -371,16 +368,36 @@ public class IR {
   public static Node call(Node target, Node ... args) {
     Node call = new Node(Token.CALL, target);
     for (Node arg : args) {
-      checkState(mayBeExpression(arg), arg);
+      checkState(mayBeExpression(arg) || arg.isSpread(), arg);
       call.addChildToBack(arg);
     }
+    return call;
+  }
+
+  public static Node startOptChainCall(Node target, Node ... args) {
+    Node call = new Node(Token.OPTCHAIN_CALL, target);
+    for (Node arg : args) {
+      checkState(mayBeExpression(arg) || arg.isSpread(), arg);
+      call.addChildToBack(arg);
+    }
+    call.setIsOptionalChainStart(true);
+    return call;
+  }
+
+  public static Node continueOptChainCall(Node target, Node ... args) {
+    Node call = new Node(Token.OPTCHAIN_CALL, target);
+    for (Node arg : args) {
+      checkState(mayBeExpression(arg) || arg.isSpread(), arg);
+      call.addChildToBack(arg);
+    }
+    call.setIsOptionalChainStart(false);
     return call;
   }
 
   public static Node newNode(Node target, Node ... args) {
     Node newcall = new Node(Token.NEW, target);
     for (Node arg : args) {
-      checkState(mayBeExpression(arg));
+      checkState(mayBeExpression(arg) || arg.isSpread(), arg);
       newcall.addChildToBack(arg);
     }
     return newcall;
@@ -390,6 +407,22 @@ public class IR {
     Preconditions.checkState(name.indexOf('.') == -1,
         "Invalid name '%s'. Did you mean to use NodeUtil.newQName?", name);
     return Node.newString(Token.NAME, name);
+  }
+
+  public static Node startOptChainGetprop(Node target, Node prop) {
+    checkState(mayBeExpression(target), target);
+    checkState(prop.isString(), prop);
+    Node optChainGetProp = new Node(Token.OPTCHAIN_GETPROP, target, prop);
+    optChainGetProp.setIsOptionalChainStart(true);
+    return optChainGetProp;
+  }
+
+  public static Node continueOptChainGetprop(Node target, Node prop) {
+    checkState(mayBeExpression(target), target);
+    checkState(prop.isString(), prop);
+    Node optChainGetProp = new Node(Token.OPTCHAIN_GETPROP, target, prop);
+    optChainGetProp.setIsOptionalChainStart(false);
+    return optChainGetProp;
   }
 
   public static Node getprop(Node target, Node prop) {
@@ -416,6 +449,22 @@ public class IR {
       result = new Node(Token.GETPROP, result, IR.string(moreProp));
     }
     return result;
+  }
+
+  public static Node startOptChainGetelem(Node target, Node elem) {
+    checkState(mayBeExpression(target), target);
+    checkState(mayBeExpression(elem), elem);
+    Node optChainGetElem = new Node(Token.OPTCHAIN_GETELEM, target, elem);
+    optChainGetElem.setIsOptionalChainStart(true);
+    return optChainGetElem;
+  }
+
+  public static Node continueOptChainGetelem(Node target, Node elem) {
+    checkState(mayBeExpression(target), target);
+    checkState(mayBeExpression(elem), elem);
+    Node optChainGetElem = new Node(Token.OPTCHAIN_GETELEM, target, elem);
+    optChainGetElem.setIsOptionalChainStart(false);
+    return optChainGetElem;
   }
 
   public static Node getelem(Node target, Node elem) {
@@ -458,6 +507,10 @@ public class IR {
     return binaryOp(Token.OR, expr1, expr2);
   }
 
+  public static Node coalesce(Node expr1, Node expr2) {
+    return binaryOp(Token.COALESCE, expr1, expr2);
+  }
+
   public static Node not(Node expr1) {
     return unaryOp(Token.NOT, expr1);
   }
@@ -467,6 +520,11 @@ public class IR {
    */
   public static Node lt(Node expr1, Node expr2) {
     return binaryOp(Token.LT, expr1, expr2);
+  }
+
+  /** "&gt;=" */
+  public static Node ge(Node expr1, Node expr2) {
+    return binaryOp(Token.GE, expr1, expr2);
   }
 
   /**
@@ -541,14 +599,19 @@ public class IR {
   public static Node objectlit(Node ... propdefs) {
     Node objectlit = new Node(Token.OBJECTLIT);
     for (Node propdef : propdefs) {
-      checkState(
-          propdef.isStringKey()
-              || propdef.isMemberFunctionDef()
-              || propdef.isGetterDef()
-              || propdef.isSetterDef());
-      if (!propdef.isStringKey()) {
-        checkState(propdef.hasOneChild());
+      switch (propdef.getToken()) {
+        case STRING_KEY:
+        case MEMBER_FUNCTION_DEF:
+        case GETTER_DEF:
+        case SETTER_DEF:
+
+        case OBJECT_SPREAD:
+        case COMPUTED_PROP:
+          break;
+        default:
+          throw new IllegalStateException("Unexpected OBJECTLIT child: " + propdef);
       }
+
       objectlit.addChildToBack(propdef);
     }
     return objectlit;
@@ -587,9 +650,13 @@ public class IR {
   }
 
   public static Node arraylit(Node ... exprs) {
+    return arraylit(Arrays.asList(exprs));
+  }
+
+  public static Node arraylit(Iterable<Node> exprs) {
     Node arraylit = new Node(Token.ARRAYLIT);
     for (Node expr : exprs) {
-      checkState(mayBeExpressionOrEmpty(expr));
+      checkState(mayBeExpressionOrEmpty(expr) || expr.isSpread(), expr);
       arraylit.addChildToBack(expr);
     }
     return arraylit;
@@ -627,14 +694,24 @@ public class IR {
     return k;
   }
 
-  public static Node rest(Node target) {
+  public static Node iterRest(Node target) {
     checkState(target.isValidAssignmentTarget(), target);
-    return new Node(Token.REST, target);
+    return new Node(Token.ITER_REST, target);
   }
 
-  public static Node spread(Node expr) {
+  public static Node objectRest(Node target) {
+    checkState(target.isValidAssignmentTarget(), target);
+    return new Node(Token.OBJECT_REST, target);
+  }
+
+  public static Node iterSpread(Node expr) {
     checkState(mayBeExpression(expr));
-    return new Node(Token.SPREAD, expr);
+    return new Node(Token.ITER_SPREAD, expr);
+  }
+
+  public static Node objectSpread(Node expr) {
+    checkState(mayBeExpression(expr));
+    return new Node(Token.OBJECT_SPREAD, expr);
   }
 
   public static Node superNode() {
@@ -650,6 +727,10 @@ public class IR {
 
   public static Node number(double d) {
     return Node.newNumber(d);
+  }
+
+  public static Node bigint(BigInteger b) {
+    return Node.newBigInt(b);
   }
 
   public static Node thisNode() {
@@ -670,6 +751,10 @@ public class IR {
 
   public static Node typeof(Node expr) {
     return unaryOp(Token.TYPEOF, expr);
+  }
+
+  public static Node importMeta() {
+    return new Node(Token.IMPORT_META);
   }
 
   // helper methods
@@ -773,12 +858,14 @@ public class IR {
       case ASSIGN_DIV:
       case ASSIGN_MOD:
       case AWAIT:
+      case BIGINT:
       case BITAND:
       case BITOR:
       case BITNOT:
       case BITXOR:
       case CALL:
       case CAST:
+      case COALESCE:
       case COMMA:
       case DEC:
       case DELPROP:
@@ -791,6 +878,7 @@ public class IR {
       case GETELEM:
       case GT:
       case HOOK:
+      case IMPORT_META:
       case IN:
       case INC:
       case INSTANCEOF:
@@ -808,13 +896,15 @@ public class IR {
       case NUMBER:
       case NULL:
       case OBJECTLIT:
+      case OPTCHAIN_CALL:
+      case OPTCHAIN_GETELEM:
+      case OPTCHAIN_GETPROP:
       case OR:
       case POS:
       case REGEXP:
       case RSH:
       case SHEQ:
       case SHNE:
-      case SPREAD:
       case STRING:
       case SUB:
       case SUPER:

@@ -26,7 +26,6 @@ import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link ProcessCommonJSModules} */
-
 @RunWith(JUnit4.class)
 public final class ProcessCommonJSModulesTest extends CompilerTestCase {
 
@@ -50,11 +49,6 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
   @Override
   protected CompilerPass getProcessor(Compiler compiler) {
     return new ProcessCommonJSModules(compiler);
-  }
-
-  @Override
-  protected int getNumRepetitions() {
-    return 1;
   }
 
   void testModules(String filename, String input, String expected) {

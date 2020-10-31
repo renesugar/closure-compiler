@@ -27,12 +27,10 @@ import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.NominalTypeBuilder;
 import com.google.javascript.rhino.jstype.FunctionType;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
  * This describes the Closure-specific JavaScript coding conventions.
- *
  */
 @Immutable
 public final class ClosureCodingConvention extends CodingConventions.Proxy {
@@ -263,21 +261,6 @@ public final class ClosureCodingConvention extends CodingConventions.Proxy {
   @Override
   public List<String> identifyTypeDeclarationCall(Node n) {
     Node callName = n.getFirstChild();
-    if (callName.matchesQualifiedName("goog.addDependency") &&
-        n.getChildCount() >= 3) {
-      Node typeArray = callName.getNext().getNext();
-      if (typeArray.isArrayLit()) {
-        List<String> typeNames = new ArrayList<>();
-        for (Node name = typeArray.getFirstChild(); name != null;
-             name = name.getNext()) {
-          if (name.isString()) {
-            typeNames.add(name.getString());
-          }
-        }
-        return typeNames;
-      }
-    }
-
     // Identify forward declaration of form goog.forwardDeclare('foo.bar')
     if (callName.matchesQualifiedName("goog.forwardDeclare") && n.hasTwoChildren()) {
       Node typeDeclaration = n.getSecondChild();
@@ -318,11 +301,6 @@ public final class ClosureCodingConvention extends CodingConventions.Proxy {
     return "goog.global";
   }
 
-  @Override
-  public boolean isAliasingGlobalThis(Node n) {
-    return CodingConventions.isAliasingGlobalThis(this, n);
-  }
-
   private final ImmutableSet<String> propertyTestFunctions = ImmutableSet.of(
       "goog.isDef", "goog.isNull", "goog.isDefAndNotNull",
       "goog.isString", "goog.isNumber", "goog.isBoolean",
@@ -358,7 +336,7 @@ public final class ClosureCodingConvention extends CodingConventions.Proxy {
     Node callName = callNode.getFirstChild();
     if (!(callName.matchesQualifiedName("goog.reflect.object")
             || callName.matchesQualifiedName("$jscomp.reflectObject"))
-        || callNode.getChildCount() != 3) {
+        || !callNode.hasXChildren(3)) {
       return null;
     }
 
@@ -382,16 +360,26 @@ public final class ClosureCodingConvention extends CodingConventions.Proxy {
 
   @Override
   public ImmutableCollection<AssertionFunctionSpec> getAssertionFunctions() {
-    return ImmutableList.of(
-        AssertionFunctionSpec.makeTruthyAssertion("goog.asserts.assert"),
-        AssertionFunctionSpec.makeReturnTypeAssertion("goog.asserts.assertArray"),
-        AssertionFunctionSpec.makeReturnTypeAssertion("goog.asserts.assertBoolean"),
-        AssertionFunctionSpec.makeReturnTypeAssertion("goog.asserts.assertElement"),
-        AssertionFunctionSpec.makeReturnTypeAssertion("goog.asserts.assertFunction"),
-        AssertionFunctionSpec.makeReturnTypeAssertion("goog.asserts.assertInstanceof"),
-        AssertionFunctionSpec.makeReturnTypeAssertion("goog.asserts.assertNumber"),
-        AssertionFunctionSpec.makeReturnTypeAssertion("goog.asserts.assertObject"),
-        AssertionFunctionSpec.makeReturnTypeAssertion("goog.asserts.assertString"));
+    return ImmutableSet.<AssertionFunctionSpec>builder()
+        .addAll(super.getAssertionFunctions())
+        .add(
+            AssertionFunctionSpec.forTruthy().setFunctionName("goog.asserts.assert").build(),
+            createGoogAssertOnReturn("Array"),
+            createGoogAssertOnReturn("Boolean"),
+            createGoogAssertOnReturn("Element"),
+            createGoogAssertOnReturn("Function"),
+            createGoogAssertOnReturn("Instanceof"),
+            createGoogAssertOnReturn("Number"),
+            createGoogAssertOnReturn("Object"),
+            createGoogAssertOnReturn("String"))
+        .build();
+  }
+
+  /** Returns a new assertion function goog.asserts.assert[assertedTypeName] */
+  private static AssertionFunctionSpec createGoogAssertOnReturn(String assertedTypeName) {
+    return AssertionFunctionSpec.forMatchesReturn()
+        .setFunctionName("goog.asserts.assert" + assertedTypeName)
+        .build();
   }
 
   @Override

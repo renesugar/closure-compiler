@@ -58,7 +58,6 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
   private final JSType concatFnType;
   private final JSType nullType;
   private final JSType numberType;
-  private final JSType u2uFunctionType;
   private final JSType functionFunctionType;
 
   public Es6RewriteRestAndSpread(AbstractCompiler compiler) {
@@ -71,7 +70,6 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
       this.concatFnType = arrayType.findPropertyType("concat");
       this.nullType = registry.getNativeType(JSTypeNative.NULL_TYPE);
       this.numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
-      this.u2uFunctionType = registry.getNativeType(JSTypeNative.U2U_FUNCTION_TYPE);
       this.functionFunctionType = registry.getNativeType(JSTypeNative.FUNCTION_FUNCTION_TYPE);
     } else {
       this.arrayType = null;
@@ -79,7 +77,6 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
       this.concatFnType = null;
       this.nullType = null;
       this.numberType = null;
-      this.u2uFunctionType = null;
       this.functionFunctionType = null;
     }
   }
@@ -100,7 +97,7 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
   @Override
   public void visit(NodeTraversal traversal, Node current, Node parent) {
     switch (current.getToken()) {
-      case REST:
+      case ITER_REST:
         visitRestParam(traversal, current, parent);
         break;
       case ARRAYLIT:
@@ -126,7 +123,6 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
     String paramName = nameNode.getString();
 
     // Swap the existing param into the list, moving requisite AST annotations.
-    nameNode.setVarArgs(true);
     nameNode.setJSDocInfo(restParam.getJSDocInfo());
     paramList.replaceChild(restParam, nameNode.detach());
 
@@ -144,7 +140,8 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
 
     // TODO(lharker): we should report this error in typechecking, not during transpilation, so
     // that it also occurs when natively typechecking ES6.
-    if (paramTypeAnnotation != null && paramTypeAnnotation.getRoot().getToken() != Token.ELLIPSIS) {
+    if (paramTypeAnnotation != null
+        && paramTypeAnnotation.getRoot().getToken() != Token.ITER_REST) {
       compiler.report(JSError.make(restParam, BAD_REST_PARAMETER_ANNOTATION));
     }
 
@@ -162,7 +159,7 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
     Node name = IR.name(paramName);
     Node let = IR.let(name, newArrayName).useSourceInfoIfMissingFromForTree(functionBody);
     newBlock.addChildToFront(let);
-    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS);
+    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS, compiler);
 
     for (Node child : functionBody.children()) {
       newBlock.addChildToBack(child.detach());
@@ -350,20 +347,24 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
     checkArgument(spreadParent.isCall());
 
     Node callee = spreadParent.getFirstChild();
+    // ES6 classes must all be transpiled away before this pass runs.
+    checkState(!callee.isSuper(), "Cannot spread into super calls");
     // Check if the callee has side effects before removing it from the AST (since some NodeUtil
     // methods assume the node they are passed has a non-null parent).
-    boolean calleeMayHaveSideEffects = NodeUtil.mayHaveSideEffects(callee, compiler);
+    boolean calleeMayHaveSideEffects = compiler.getAstAnalyzer().mayHaveSideEffects(callee);
     // Must remove callee before extracting argument groups.
     spreadParent.removeChild(callee);
 
+    while (callee.isCast()) {
+      // Drop any CAST nodes. They're not needed anymore since this pass runs at the end of
+      // the checks phase, and they complicate detecting GETPROP/GETELEM callees.
+      callee = callee.removeFirstChild();
+    }
     final Node joinedGroups;
     if (spreadParent.hasOneChild() && isSpreadOfArguments(spreadParent.getOnlyChild())) {
       // Check for special case of `foo(...arguments)` and pass `arguments` directly to
       // `foo.apply(null, arguments)`. We want to avoid calling $jscomp.arrayFromIterable(arguments)
       // for this case, because it can have side effects, which prevents code removal.
-      //
-      // TODO(b/74074478): Generalize this to avoid ever calling $jscomp.arrayFromIterable() for
-      // `arguments`.
       joinedGroups = spreadParent.removeFirstChild().removeFirstChild();
     } else {
       List<Node> groups = extractSpreadGroups(spreadParent);
@@ -385,9 +386,10 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
       }
       joinedGroups.setJSType(arrayType);
     }
+    boolean isFreeCall = spreadParent.getBooleanProp(Node.FREE_CALL);
 
     final Node callToApply;
-    if (calleeMayHaveSideEffects && callee.isGetProp()) {
+    if (calleeMayHaveSideEffects && callee.isGetProp() && !isFreeCall) {
       JSType receiverType = callee.getFirstChild().getJSType(); // Type of `foo()`.
 
       // foo().method(...[a, b, c])
@@ -416,7 +418,7 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
       // or
       // foo(...[a, b, c]) -> foo.apply(null, [a, b, c])
       Node context =
-          (callee.isGetProp() || callee.isGetElem())
+          (callee.isGetProp() || callee.isGetElem()) && !isFreeCall
               ? callee.getFirstChild().cloneTree()
               : nullWithJSType();
       callToApply = IR.call(getpropInferringJSType(callee, "apply"), context, joinedGroups);
@@ -429,7 +431,7 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
   }
 
   private boolean isSpreadOfArguments(Node n) {
-    return n.isSpread() && n.getOnlyChild().matchesQualifiedName("arguments");
+    return n.isSpread() && n.getOnlyChild().matchesName("arguments");
   }
 
   /**
@@ -481,11 +483,10 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
     //      function(function(new:[spreadParent], ...?), !Array<?>):function(new:[spreadParent])
     Node bindApply =
         getpropInferringJSType(
-            IR.getprop(
-                    getpropInferringJSType(
-                        IR.name("Function").setJSType(functionFunctionType), "prototype"),
-                    "bind")
-                .setJSType(u2uFunctionType),
+            getpropInferringJSType(
+                getpropInferringJSType(
+                    IR.name("Function").setJSType(functionFunctionType), "prototype"),
+                "bind"),
             "apply");
     Node result =
         IR.newNode(
@@ -526,7 +527,7 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
     Node call = IR.call(callee, args);
 
     JSType calleeType = callee.getJSType();
-    if (calleeType == null || !(calleeType instanceof FunctionType)) {
+    if (!(calleeType instanceof FunctionType)) {
       return call;
     }
 

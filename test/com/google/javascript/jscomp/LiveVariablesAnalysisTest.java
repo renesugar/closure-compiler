@@ -34,7 +34,6 @@ import org.junit.runners.JUnit4;
  * Tests for {@link LiveVariablesAnalysis}. Test cases are snippets of a function and assertions are
  * made at the instruction labeled with {@code X}.
  *
- * @author simranarora@google.com (Simran Arora)
  */
 @RunWith(JUnit4.class)
 public final class LiveVariablesAnalysisTest {
@@ -100,6 +99,74 @@ public final class LiveVariablesAnalysisTest {
     assertLiveBeforeX("var a,b;a();X:if(a&&(a=b)){}a()", "a");
     assertLiveBeforeX("var a,b;a();X:while(b&&(a=b)){}a()", "a");
     assertLiveBeforeX("var a,b;a();X:while(a&&(a=b)){}a()", "a");
+  }
+
+  @Test
+  public void nullishCoalesce() {
+    // Reading the condition makes the variable live.
+    assertLiveBeforeX("var a,b;X:if(a??b) {}", "a");
+    assertLiveBeforeX("var a,b;X:if(b??a) {}", "a");
+    assertLiveBeforeX("var a,b;X:if(b??b(a)) {}", "a");
+
+    // Unconditionally killed on lhs of ??
+    assertNotLiveAfterX("var a,b;X:a();if((a=b)??b){}a()", "a");
+    assertNotLiveAfterX("var a,b;X:a();while((a=b)??b){}a()", "a");
+
+    // The kill can be "conditional" due to short circuit.
+    assertLiveBeforeX("var a,b; X:if(b??(a=b)){}a()", "a"); // Assumed live.
+    assertLiveBeforeX("var a,b; X:if(a??(a=b)){}a()", "a");
+    assertLiveBeforeX("var a,b; X:while(b??(a=b)){}a()", "a");
+    assertLiveBeforeX("var a,b; X:while(a??(a=b)){}a()", "a");
+  }
+
+  @Test
+  public void optionalChainingGetProp() {
+    // Reading the var on lhs of opt chain makes the variable live.
+    assertNotLiveBeforeX("var a,b; X:if(b) {}", "a");
+    assertLiveBeforeX("var a,b; X:if(a?.b) {}", "a");
+
+    // Reading a prop with the same name as var does not make the var live
+    assertNotLiveBeforeX("var a,b;X:if(b?.a) {}", "a");
+
+    // unconditional kill on lhs of ?.
+    assertNotLiveAfterX("var a,b;X:a();if((a=c)?.b){} a()", "a");
+    assertNotLiveAfterX("var a,b;X:a();while((a=b)?.b){} a()", "a");
+  }
+
+  @Test
+  public void optionalChainingCall() {
+    // conditionally accessing var keeps it live
+    assertLiveBeforeX("var a,b; X:if(b?.(a)){}", "a");
+
+    // unconditionally overwriting a var kills it
+    assertNotLiveAfterX("var a,b; X:a(); if((a=b)?.b()){} a()", "a");
+
+    // conditionally overwriting var does not kill it
+    assertLiveBeforeX("var a,b; X:if(b?.(a=c)){} a();", "a");
+
+    // conditional overwrite on rhs of ?. does not kill the var
+    assertLiveBeforeX("var a,b; X:if(b?.(a=b)){}a()", "a"); // Assumed live.
+    assertLiveBeforeX("var a,b; X:if(a?.(a=b)){}a()", "a");
+    assertLiveBeforeX("var a,b; X:while(b?.(a=b)){}a()", "a");
+    assertLiveBeforeX("var a,b; X:while(a?.(a=b)){}a()", "a");
+  }
+
+  @Test
+  public void optionalChainingGetElem() {
+    // conditionally accessing var keeps it live
+    assertLiveBeforeX("var a,b; X:if(b?.[a]) {}", "a");
+
+    // unconditionally overwriting a var kills it
+    assertNotLiveAfterX("var a,b; X:a(); if((a=b)?.[b]){} a()", "a");
+
+    // conditionally overwriting var does not kill it
+    assertLiveBeforeX("var a,b; X:if(b?.[a=c]) {} a();", "a");
+
+    // conditional overwrite on rhs of ?. does not kill the var
+    assertLiveBeforeX("var a,b; X:if(b?.[a=b]){}a()", "a"); // Assumed live.
+    assertLiveBeforeX("var a,b; X:if(a?.[a=b]){}a()", "a");
+    assertLiveBeforeX("var a,b; X:while(b?.[a=b]){}a()", "a");
+    assertLiveBeforeX("var a,b; X:while(a?.[a=b]){}a()", "a");
   }
 
   @Test
@@ -262,21 +329,34 @@ public final class LiveVariablesAnalysisTest {
     // Check that use of arguments forces the parameters into the
     // escaped set.
     assertEscaped("arguments[0]", "param1");
-    assertEscaped("arguments[0]", "param2");
-    assertEscaped("arguments[0]", "param3");
+    assertNotEscaped("arguments[0]", "param2");
+    assertNotEscaped("arguments[0]", "param3");
+
     assertEscaped("var args = arguments", "param1");
-    assertEscaped("var args = arguments", "param2");
-    assertEscaped("var args = arguments", "param3");
+    assertNotEscaped("var args = arguments", "param2");
+    assertNotEscaped("var args = arguments", "param3");
+
     assertNotEscaped("arguments = []", "param1");
     assertNotEscaped("arguments = []", "param2");
     assertNotEscaped("arguments = []", "param3");
-    assertEscaped("arguments[0] = 1", "param1");
-    assertEscaped("arguments[0] = 1", "param2");
-    assertEscaped("arguments[0] = 1", "param3");
-    assertEscaped("arguments[arguments[0]] = 1", "param1");
-    assertEscaped("arguments[arguments[0]] = 1", "param2");
-    assertEscaped("arguments[arguments[0]] = 1", "param3");
 
+    assertEscaped("arguments[0] = 1", "param1");
+    assertNotEscaped("arguments[0] = 1", "param2");
+    assertNotEscaped("arguments[0] = 1", "param3");
+
+    assertEscaped("arguments[arguments[0]] = 1", "param1");
+    assertNotEscaped("arguments[arguments[0]] = 1", "param2");
+    assertNotEscaped("arguments[arguments[0]] = 1", "param3");
+  }
+
+  @Test
+  public void testArgumentsArray_doesNotEscape_destructuredParams() {
+    // These cases also cover a crash related to assuming all RESTs have a NAME child.
+    assertNotEscaped("function f([a]) { arguments; }", "a");
+    assertNotEscaped("function f([a] = []) { arguments; }", "a");
+    assertNotEscaped("function f(...[a]) { arguments; }", "a");
+    assertNotEscaped("function f({a}) { arguments; }", "a");
+    assertNotEscaped("function f({a} = {}) { arguments; }", "a");
   }
 
   @Test
@@ -548,7 +628,7 @@ public final class LiveVariablesAnalysisTest {
 
   private static void assertEscaped(String src, String name) {
     for (Var var : computeLiveness(src, false).getEscapedLocals()) {
-      if (var.name.equals(name)) {
+      if (var.getName().equals(name)) {
         return;
       }
     }
@@ -557,7 +637,7 @@ public final class LiveVariablesAnalysisTest {
 
   private static void assertNotEscaped(String src, String name) {
     for (Var var : computeLiveness(src, false).getEscapedLocals()) {
-      assertThat(var.name).isNotEqualTo(name);
+      assertThat(var.getName()).isNotEqualTo(name);
     }
   }
 
@@ -565,7 +645,7 @@ public final class LiveVariablesAnalysisTest {
     // Set up compiler
     Compiler compiler = new Compiler();
     CompilerOptions options = new CompilerOptions();
-    options.setLanguage(LanguageMode.ECMASCRIPT_2018);
+    options.setLanguage(LanguageMode.ECMASCRIPT_NEXT_IN);
     options.setCodingConvention(new GoogleCodingConvention());
     compiler.initOptions(options);
     compiler.setLifeCycleStage(LifeCycleStage.NORMALIZED);
@@ -580,7 +660,7 @@ public final class LiveVariablesAnalysisTest {
     assertThat(compiler.getErrors()).isEmpty();
 
     // Create scopes
-    Es6SyntacticScopeCreator scopeCreator = new Es6SyntacticScopeCreator(compiler);
+    SyntacticScopeCreator scopeCreator = new SyntacticScopeCreator(compiler);
     Scope scope = scopeCreator.createScope(n, Scope.createGlobalScope(script));
     Scope childScope = scopeCreator.createScope(NodeUtil.getFunctionBody(n), scope);
 
@@ -592,7 +672,7 @@ public final class LiveVariablesAnalysisTest {
     // Compute liveness of variables
     LiveVariablesAnalysis analysis =
         new LiveVariablesAnalysis(
-            cfg, scope, childScope, compiler, new Es6SyntacticScopeCreator(compiler));
+            cfg, scope, childScope, compiler, new SyntacticScopeCreator(compiler));
     analysis.analyze();
     return analysis;
   }

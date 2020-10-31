@@ -124,7 +124,7 @@ public final class Es6RewriteClassExtendsExpressions extends NodeTraversal.Abstr
         Node lhsNode = classNodeParent.getFirstChild();
         // We can extract a temporary variable for some_expression as long as lhs expression
         // has no side effects.
-        return !NodeUtil.mayHaveSideEffects(lhsNode, compiler);
+        return !compiler.getAstAnalyzer().mayHaveSideEffects(lhsNode);
       } else {
         return false;
       }
@@ -144,7 +144,8 @@ public final class Es6RewriteClassExtendsExpressions extends NodeTraversal.Abstr
         IR.constNode(IR.name(name), originalExtends)
             .useSourceInfoIfMissingFromForTree(originalExtends);
     statement.getParent().addChildBefore(extendsAlias, statement);
-    NodeUtil.addFeatureToScript(NodeUtil.getEnclosingScript(classNode), Feature.CONST_DECLARATIONS);
+    NodeUtil.addFeatureToScript(
+        NodeUtil.getEnclosingScript(classNode), Feature.CONST_DECLARATIONS, compiler);
     t.reportCodeChange(classNode);
   }
 

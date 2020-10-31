@@ -36,7 +36,7 @@ function checkSetGet(map, key, value) {
 }
 
 /**
- * Feeze an object recursively
+ * Freeze an object recursively
  *
  * @param {?} o
  * @return {?}
@@ -85,31 +85,6 @@ testSuite({
     assertUndefined(map.get(key));
   },
 
-  testSealedKeys() {
-    if (!Object.seal) return;
-
-    const key1 = Object.seal({});
-    const key2 = Object.seal({});
-    const key3 = Object.freeze({});
-
-    const map = new WeakMap();
-    checkSetGet(map, key1, 'a');
-    checkSetGet(map, key2, 'b');
-    checkSetGet(map, key3, 'c');
-
-    assertEquals('a', map.get(key1));
-    assertEquals('b', map.get(key2));
-    assertEquals('c', map.get(key3));
-    assertTrue(map.delete(key1));
-    assertFalse(map.delete(key1));
-    assertTrue(map.delete(key2));
-    assertTrue(map.delete(key3));
-
-    assertFalse(map.has(key1));
-    assertFalse(map.has(key2));
-    assertFalse(map.has(key3));
-  },
-
   testKeyIdNotEnumerable() {
     if (IE8) return;
     const map = new WeakMap();
@@ -152,5 +127,29 @@ testSuite({
     // "Object.freeze" to support WeakMap.
     const a = {};
     assertEquals(a, deepFreeze(a));
+  },
+
+  testSet_nonObject() {
+    const map = new WeakMap();
+    assertThrows(() => map.set(null, 2));
+    assertThrows(() => map.set(1, 2));
+  },
+
+  testGet_nonObject() {
+    const map = new WeakMap();
+    assertUndefined(map.get(null));
+    assertUndefined(map.get(1));
+  },
+
+  testHas_nonObject() {
+    const map = new WeakMap();
+    assertFalse(map.has(null));
+    assertFalse(map.has(1));
+  },
+
+  testDelete_nonObject() {
+    const map = new WeakMap();
+    assertFalse(map.delete(null));
+    assertFalse(map.delete(1));
   },
 });

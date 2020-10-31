@@ -28,6 +28,7 @@ import org.junit.runners.JUnit4;
 
 /** Tests for {@link RewriteCatchWithNoBinding}. */
 @RunWith(JUnit4.class)
+@SuppressWarnings("RhinoNodeGetFirstFirstChild")
 public class RewriteCatchWithNoBindingTest extends CompilerTestCase {
 
   @Before
@@ -42,8 +43,8 @@ public class RewriteCatchWithNoBindingTest extends CompilerTestCase {
   }
 
   @Override
-  protected CompilerOptions getOptions(CompilerOptions options) {
-    super.getOptions(options);
+  protected CompilerOptions getOptions() {
+    CompilerOptions options = super.getOptions();
     options.setLanguageIn(LanguageMode.ECMASCRIPT_2019);
     return options;
   }

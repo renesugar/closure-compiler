@@ -65,10 +65,8 @@ public final class InlinePropertiesTest extends CompilerTestCase {
               .removeGlobals(true)
               .preserveFunctionExpressionNames(true)
               .removeUnusedPrototypeProperties(true)
-              .allowRemovalOfExternProperties(false)
               .removeUnusedThisProperties(true)
               .removeUnusedObjectDefinePropertiesDefinitions(true)
-              .removeUnusedConstructorProperties(true)
               .build();
       return new CompilerPass(){
 
@@ -80,11 +78,6 @@ public final class InlinePropertiesTest extends CompilerTestCase {
       };
     }
     return pass;
-  }
-
-  @Override
-  protected int getNumRepetitions() {
-    return 1;
   }
 
   @Override
@@ -493,6 +486,18 @@ public final class InlinePropertiesTest extends CompilerTestCase {
   }
 
   @Test
+  public void testTypeMismatchForPrototypeNoPropInlining() {
+    testSame(
+        lines(
+            "/** @constructor */",
+            "function C() {}",
+            "C.prototype.foo = 1;",
+            "function f(/** number */ x) {}",
+            "f(C.prototype);",
+            "new C().foo;"));
+  }
+
+  @Test
   public void testStructuralInterfacesNoPropInlining() {
     testSame(
         lines(
@@ -704,5 +709,27 @@ public final class InlinePropertiesTest extends CompilerTestCase {
             "}",
             "new C(), 3;",
             "const {foo} = new C();"));
+  }
+
+  @Test
+  public void testNoInlineOnRecordType() {
+    testSame(
+        lines(
+            "/** @record */",
+            "class C {}", //
+            "C.bar = 2;",
+            "C.foo = 1;",
+            "var z = C.foo;"));
+  }
+
+  @Test
+  public void testNoInlineOnInterfaceType() {
+    testSame(
+        lines(
+            "/** @interface */",
+            "class C {}", //
+            "C.bar = 2;",
+            "C.foo = 1;",
+            "var z = C.foo;"));
   }
 }

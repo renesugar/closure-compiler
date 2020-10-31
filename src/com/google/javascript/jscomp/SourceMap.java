@@ -38,8 +38,6 @@ import javax.annotation.Nullable;
  * @see CodeConsumer
  * @see CodeGenerator
  * @see CodePrinter
- *
- * @author johnlenz@google.com (John Lenz)
  */
 public final class SourceMap {
   /**
@@ -69,7 +67,9 @@ public final class SourceMap {
     // code-origin analysis.
     ALL {
       @Override public boolean apply(Node node) {
-        return true;
+        // For a GETPROP 'foo.bar' node we create two mappings from its children 'foo' and 'bar' so
+        // there is no need in creating mapping for the node itself.
+        return !node.isGetProp();
       }
     },
     // SYMBOLS is intended to be used for stack trace deobfuscation when full
@@ -80,9 +80,9 @@ public final class SourceMap {
             || node.isNew()
             || node.isFunction()
             || node.isName()
-            || NodeUtil.isGet(node)
+            || NodeUtil.isNormalGet(node)
             || NodeUtil.mayBeObjectLitKey(node)
-            || (node.isString() && NodeUtil.isGet(node.getParent()))
+            || (node.isString() && NodeUtil.isNormalGet(node.getParent()))
             || node.isTaggedTemplateLit();
       }
     }
@@ -171,7 +171,7 @@ public final class SourceMap {
 
     int lineNo = node.getLineno();
     int charNo = node.getCharno();
-    String originalName = node.getOriginalName();
+    String originalName = SourceMap.getOriginalName(node);
 
     if (mapping != null) {
       OriginalMapping sourceMapping = mapping.getSourceMapping(sourceFile, lineNo, charNo);
@@ -180,9 +180,7 @@ public final class SourceMap {
         lineNo = sourceMapping.getLineNumber();
         charNo = sourceMapping.getColumnPosition();
         String identifier = sourceMapping.getIdentifier();
-        // TODO(bradfordcsmith): When we move off of GWT we should be able
-        //     to use sourceMapping.hasIdentifier() instead of a null check.
-        if (identifier != null && !identifier.isEmpty()) {
+        if (sourceMapping.hasIdentifier() && !identifier.isEmpty()) {
           originalName = identifier;
         }
       }
@@ -202,6 +200,20 @@ public final class SourceMap {
 
   public void addSourceFile(String name, String code) {
     generator.addSourcesContent(fixupSourceLocation(name), code);
+  }
+
+  private static String getOriginalName(Node node) {
+    if (node.getOriginalName() != null) {
+      return node.getOriginalName();
+    }
+    if (node.isMemberFunctionDef()) {
+      return node.getFirstChild().getOriginalName();
+    }
+    Node parent = node.getParent();
+    if (node.isString() && (parent.isGetProp() || parent.isOptChainGetProp())) {
+      return parent.getOriginalName();
+    }
+    return null;
   }
 
   /**

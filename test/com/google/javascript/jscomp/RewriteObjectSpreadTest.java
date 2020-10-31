@@ -18,6 +18,7 @@ package com.google.javascript.jscomp;
 import static com.google.javascript.rhino.testing.TypeSubject.assertType;
 
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import com.google.javascript.rhino.Node;
 import org.junit.Before;
 import org.junit.Test;
@@ -53,11 +54,6 @@ public final class RewriteObjectSpreadTest extends CompilerTestCase {
     return new RewriteObjectSpread(compiler);
   }
 
-  @Override
-  protected int getNumRepetitions() {
-    return 1;
-  }
-
   @Test
   public void testObjectLiteralWithSpread() {
     test("({first, ...spread});", "Object.assign({}, {first}, spread)");
@@ -74,7 +70,7 @@ public final class RewriteObjectSpreadTest extends CompilerTestCase {
   }
 
   @Test
-  public void testCorrectTypes_knownProperties() {
+  public void testTyping_ofSpreadResult_isObject() {
     test(
         lines(
             "const first = 0;", //
@@ -88,85 +84,9 @@ public final class RewriteObjectSpreadTest extends CompilerTestCase {
     Compiler lastCompiler = getLastCompiler();
 
     Node obj = getNodeMatchingQName(lastCompiler.getJsRoot(), "obj");
-    assertType(obj.getJSType())
-        .toStringIsEqualTo(
-            lines(
-                "{", //
-                "  bar: string,",
-                "  first: number,",
-                "  qux: boolean",
-                "}"));
+    assertType(obj.getJSType()).toStringIsEqualTo("Object");
     assertType(obj.getFirstFirstChild().getJSType())
-        .toStringIsEqualTo(
-            lines(
-                "function(Object, ...(Object|null)): {", //
-                "  bar: string,",
-                "  first: number,",
-                "  qux: boolean",
-                "}"));
-  }
-
-  @Test
-  public void testCorrectTypes_knownProperties_multipleSpreads() {
-    test(
-        lines(
-            "const first = 0;", //
-            "const spread0 = {bar: 'str', qux: false};",
-            "const spread1 = {baz: 42, foo: first};",
-            "const obj = ({...spread0, first, ...spread1});"),
-        lines(
-            "const first = 0;", //
-            "const spread0 = {bar: 'str', qux: false};",
-            "const spread1 = {baz: 42, foo: first};",
-            "const obj = Object.assign({}, spread0, {first}, spread1)"));
-
-    Compiler lastCompiler = getLastCompiler();
-
-    Node obj = getNodeMatchingQName(lastCompiler.getJsRoot(), "obj");
-    assertType(obj.getJSType())
-        .toStringIsEqualTo(
-            lines(
-                "{", //
-                "  bar: string,",
-                "  baz: number,",
-                "  first: number,",
-                "  foo: number,",
-                "  qux: boolean",
-                "}"));
-    assertType(obj.getFirstFirstChild().getJSType())
-        .toStringIsEqualTo(
-            lines(
-                "function(Object, ...(Object|null)): {", //
-                "  bar: string,",
-                "  baz: number,",
-                "  first: number,",
-                "  foo: number,",
-                "  qux: boolean",
-                "}"));
-  }
-
-  @Test
-  public void testCorrectTypes_unknownProperties() {
-    test("const obj = ({first, ...spread});", "const obj = Object.assign({}, {first}, spread)");
-
-    Compiler lastCompiler = getLastCompiler();
-
-    Node obj = getNodeMatchingQName(lastCompiler.getJsRoot(), "obj");
-    assertType(obj.getJSType()).toStringIsEqualTo("{first: ?}");
-    assertType(obj.getFirstFirstChild().getJSType())
-        .toStringIsEqualTo("function(Object, ...(Object|null)): {first: ?}");
-  }
-
-  @Test
-  public void testCorrectTypes_unknownSpread() {
-    test("const obj = ({...spread});", "const obj = Object.assign({}, spread)");
-
-    Compiler lastCompiler = getLastCompiler();
-
-    Node obj = getNodeMatchingQName(lastCompiler.getJsRoot(), "obj");
-    assertType(obj.getJSType()).toStringIsEqualTo("{}");
-    assertType(obj.getFirstFirstChild().getJSType())
-        .toStringIsEqualTo("function(Object, ...(Object|null)): {}");
+        .toStringIsEqualTo("function(Object, ...(Object|null)): Object");
   }
 
   /** Returns the first node (preorder) in the given AST that matches the given qualified name */

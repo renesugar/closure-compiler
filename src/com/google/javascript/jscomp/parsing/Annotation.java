@@ -21,14 +21,13 @@ import java.util.Map;
 
 /**
  * All natively recognized JSDoc annotations.
- * @author nicksantos@google.com (Nick Santos)
  */
 enum Annotation {
   NG_INJECT,
   ABSTRACT,
+  ALTERNATE_MESSAGE_ID,
   AUTHOR,
   CLOSURE_PRIMITIVE,
-  CONSISTENTIDGENERATOR,
   CONSTANT,
   CONSTRUCTOR,
   CUSTOM_ELEMENT,
@@ -37,7 +36,6 @@ enum Annotation {
   DEPRECATED,
   DESC,
   DICT,
-  DISPOSES,
   ENUM,
   EXTENDS,
   EXTERNS,
@@ -73,7 +71,6 @@ enum Annotation {
   PUBLIC,
   RETURN,
   SEE,
-  STABLEIDGENERATOR,
   STRUCT,
   SUPPRESS,
   TEMPLATE,
@@ -90,10 +87,10 @@ enum Annotation {
       new ImmutableMap.Builder<String, Annotation>()
           .put("ngInject", Annotation.NG_INJECT)
           .put("abstract", Annotation.ABSTRACT)
+          .put("alternateMessageId", Annotation.ALTERNATE_MESSAGE_ID)
           .put("argument", Annotation.PARAM)
           .put("author", Annotation.AUTHOR)
           .put("closurePrimitive", Annotation.CLOSURE_PRIMITIVE)
-          .put("consistentIdGenerator", Annotation.CONSISTENTIDGENERATOR)
           .put("const", Annotation.CONSTANT)
           .put("constant", Annotation.CONSTANT)
           .put("constructor", Annotation.CONSTRUCTOR)
@@ -103,7 +100,6 @@ enum Annotation {
           .put("deprecated", Annotation.DEPRECATED)
           .put("desc", Annotation.DESC)
           .put("dict", Annotation.DICT)
-          .put("disposes", Annotation.DISPOSES)
           .put("enum", Annotation.ENUM)
           .put("export", Annotation.EXPORT)
           .put("expose", Annotation.EXPOSE)
@@ -141,7 +137,6 @@ enum Annotation {
           .put("return", Annotation.RETURN)
           .put("returns", Annotation.RETURN)
           .put("see", Annotation.SEE)
-          .put("stableIdGenerator", Annotation.STABLEIDGENERATOR)
           .put("struct", Annotation.STRUCT)
           .put("suppress", Annotation.SUPPRESS)
           .put("template", Annotation.TEMPLATE)

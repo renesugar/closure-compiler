@@ -54,12 +54,15 @@ public class ParseTree {
   public ArrayLiteralExpressionTree asArrayLiteralExpression() {
     return (ArrayLiteralExpressionTree) this; }
   public ArrayPatternTree asArrayPattern() { return (ArrayPatternTree) this; }
-  public AssignmentRestElementTree asAssignmentRestElement() {
-    return (AssignmentRestElementTree) this; }
   public BinaryOperatorTree asBinaryOperator() { return (BinaryOperatorTree) this; }
   public BlockTree asBlock() { return (BlockTree) this; }
   public BreakStatementTree asBreakStatement() { return (BreakStatementTree) this; }
   public CallExpressionTree asCallExpression() { return (CallExpressionTree) this; }
+
+  public OptionalCallExpressionTree asOptionalCallExpression() {
+    return (OptionalCallExpressionTree) this;
+  }
+
   public CaseClauseTree asCaseClause() { return (CaseClauseTree) this; }
   public CatchTree asCatch() { return (CatchTree) this; }
   public ClassDeclarationTree asClassDeclaration() { return (ClassDeclarationTree) this; }
@@ -73,8 +76,6 @@ public class ParseTree {
     return (ComputedPropertyGetterTree) this; }
   public ComputedPropertyMethodTree asComputedPropertyMethod() {
     return (ComputedPropertyMethodTree) this; }
-  public ComputedPropertyMemberVariableTree asComputedPropertyMemberVariable() {
-    return (ComputedPropertyMemberVariableTree) this; }
   public ComputedPropertySetterTree asComputedPropertySetter() {
     return (ComputedPropertySetterTree) this; }
   public ConditionalExpressionTree asConditionalExpression() {
@@ -105,12 +106,25 @@ public class ParseTree {
     return (DynamicImportTree) this;
   }
 
+  public ImportMetaExpressionTree asImportMetaExpression() {
+    return (ImportMetaExpressionTree) this;
+  }
+
   public LabelledStatementTree asLabelledStatement() { return (LabelledStatementTree) this; }
   public LiteralExpressionTree asLiteralExpression() { return (LiteralExpressionTree) this; }
   public MemberExpressionTree asMemberExpression() { return (MemberExpressionTree) this; }
+
+  public OptionalMemberExpressionTree asOptionalMemberExpression() {
+    return (OptionalMemberExpressionTree) this;
+  }
+
   public MemberLookupExpressionTree asMemberLookupExpression() {
     return (MemberLookupExpressionTree) this; }
-  public MemberVariableTree asMemberVariable() { return (MemberVariableTree) this; }
+
+  public OptionalMemberLookupExpressionTree asOptionalMemberLookupExpression() {
+    return (OptionalMemberLookupExpressionTree) this;
+  }
+
   public MissingPrimaryExpressionTree asMissingPrimaryExpression() {
     return (MissingPrimaryExpressionTree) this; }
   public NewExpressionTree asNewExpression() { return (NewExpressionTree) this; }
@@ -122,10 +136,26 @@ public class ParseTree {
   public ProgramTree asProgram() { return (ProgramTree) this; }
   public PropertyNameAssignmentTree asPropertyNameAssignment() {
     return (PropertyNameAssignmentTree) this; }
-  public RestParameterTree asRestParameter() { return (RestParameterTree) this; }
+
+  public IterRestTree asIterRest() {
+    return (IterRestTree) this;
+  }
+
+  public ObjectRestTree asObjectRest() {
+    return (ObjectRestTree) this;
+  }
+
   public ReturnStatementTree asReturnStatement() { return (ReturnStatementTree) this; }
   public SetAccessorTree asSetAccessor() { return (SetAccessorTree) this; }
-  public SpreadExpressionTree asSpreadExpression() { return (SpreadExpressionTree) this; }
+
+  public IterSpreadTree asIterSpread() {
+    return (IterSpreadTree) this;
+  }
+
+  public ObjectSpreadTree asObjectSpread() {
+    return (ObjectSpreadTree) this;
+  }
+
   public SuperExpressionTree asSuperExpression() { return (SuperExpressionTree) this; }
   public SwitchStatementTree asSwitchStatement() { return (SwitchStatementTree) this; }
   public TemplateLiteralExpressionTree asTemplateLiteralExpression() {
@@ -137,16 +167,6 @@ public class ParseTree {
   public ThisExpressionTree asThisExpression() { return (ThisExpressionTree) this; }
   public ThrowStatementTree asThrowStatement() { return (ThrowStatementTree) this; }
   public TryStatementTree asTryStatement() { return (TryStatementTree) this; }
-  public TypeNameTree asTypeName() { return (TypeNameTree) this; }
-  public TypedParameterTree asTypedParameter() { return (TypedParameterTree) this; }
-  public OptionalParameterTree asOptionalParameter() { return (OptionalParameterTree) this; }
-  public ParameterizedTypeTree asParameterizedType() { return (ParameterizedTypeTree) this; }
-  public ArrayTypeTree asArrayType() { return (ArrayTypeTree) this; }
-  public RecordTypeTree asRecordType() { return (RecordTypeTree) this; }
-  public UnionTypeTree asUnionType() { return (UnionTypeTree) this; }
-  public FunctionTypeTree asFunctionType() { return (FunctionTypeTree) this; }
-  public TypeQueryTree asTypeQuery() { return (TypeQueryTree) this; }
-  public GenericTypeListTree asGenericTypeList() { return (GenericTypeListTree) this; }
   public UnaryExpressionTree asUnaryExpression() { return (UnaryExpressionTree) this; }
   public VariableDeclarationListTree asVariableDeclarationList() {
     return (VariableDeclarationListTree) this; }
@@ -159,17 +179,6 @@ public class ParseTree {
   public AwaitExpressionTree asAwaitExpression() {
     return (AwaitExpressionTree) this;
   }
-  public InterfaceDeclarationTree asInterfaceDeclaration() {
-    return (InterfaceDeclarationTree) this;
-  }
-  public EnumDeclarationTree asEnumDeclaration() { return (EnumDeclarationTree) this; }
-  public TypeAliasTree asTypeAlias() { return (TypeAliasTree) this; }
-  public AmbientDeclarationTree asAmbientDeclaration() { return (AmbientDeclarationTree) this; }
-  public NamespaceDeclarationTree asNamespaceDeclaration() {
-    return (NamespaceDeclarationTree) this;
-  }
-  public IndexSignatureTree asIndexSignature() { return (IndexSignatureTree) this; }
-  public CallSignatureTree asCallSignature() { return (CallSignatureTree) this; }
 
   public NewTargetExpressionTree asNewTargetExpression() {
     return (NewTargetExpressionTree) this;
@@ -217,12 +226,8 @@ public class ParseTree {
     }
   }
 
-  public boolean isAssignmentRestElement() {
-    return this.type == ParseTreeType.ASSIGNMENT_REST_ELEMENT;
-  }
-
   public boolean isRestParameter() {
-    return this.type == ParseTreeType.REST_PARAMETER;
+    return this.type == ParseTreeType.ITER_REST;
   }
 
   @Override

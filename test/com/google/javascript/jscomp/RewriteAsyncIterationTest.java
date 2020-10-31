@@ -22,6 +22,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.NodeUtil.Visitor;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
+import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.jstype.JSType;
 import com.google.javascript.rhino.jstype.ObjectType;
@@ -153,11 +154,6 @@ public class RewriteAsyncIterationTest extends CompilerTestCase {
   }
 
   @Override
-  protected int getNumRepetitions() {
-    return 1;
-  }
-
-  @Override
   protected CompilerOptions getOptions() {
     CompilerOptions options = super.getOptions();
     options.setLanguageOut(LanguageMode.ECMASCRIPT_2017);
@@ -189,14 +185,15 @@ public class RewriteAsyncIterationTest extends CompilerTestCase {
     Node newExpr = wrapper.getParent();
     Node innerGeneratorCall = newExpr.getSecondChild();
 
-    assertType(baz.getJSType()).toStringIsEqualTo("function(): AsyncGenerator<?>");
+    assertType(baz.getJSType()).toStringIsEqualTo("function(): AsyncGenerator<?,?,?>");
     assertType(wrapper.getJSType())
         .toStringIsEqualTo(
-            "function(new:$jscomp.AsyncGeneratorWrapper, "
-                + "Generator<($jscomp.AsyncGeneratorWrapper$ActionRecord<?>|null)>): undefined");
+            "function(new:$jscomp.AsyncGeneratorWrapper,"
+                + " Generator<($jscomp.AsyncGeneratorWrapper$ActionRecord<?>|null),?,?>):"
+                + " undefined");
     assertType(newExpr.getJSType()).toStringIsEqualTo("$jscomp.AsyncGeneratorWrapper");
     assertType(innerGeneratorCall.getJSType())
-        .toStringIsEqualTo("Generator<($jscomp.AsyncGeneratorWrapper$ActionRecord<?>|null)>");
+        .toStringIsEqualTo("Generator<($jscomp.AsyncGeneratorWrapper$ActionRecord<?>|null),?,?>");
   }
 
   @Test
@@ -222,16 +219,16 @@ public class RewriteAsyncIterationTest extends CompilerTestCase {
     Node newExpr = wrapper.getParent();
     Node innerGeneratorCall = newExpr.getSecondChild();
 
-    assertType(baz.getJSType()).toStringIsEqualTo("function(): AsyncGenerator<undefined>");
+    assertType(baz.getJSType()).toStringIsEqualTo("function(): AsyncGenerator<undefined,?,?>");
     assertType(wrapper.getJSType())
         .toStringIsEqualTo(
             "function(new:$jscomp.AsyncGeneratorWrapper, "
-                + "Generator<($jscomp.AsyncGeneratorWrapper$ActionRecord<undefined>|null)>): "
+                + "Generator<($jscomp.AsyncGeneratorWrapper$ActionRecord<undefined>|null),?,?>): "
                 + "undefined");
     assertType(newExpr.getJSType()).toStringIsEqualTo("$jscomp.AsyncGeneratorWrapper");
     assertType(innerGeneratorCall.getJSType())
         .toStringIsEqualTo(
-            "Generator" + "<($jscomp.AsyncGeneratorWrapper$ActionRecord<undefined>|null)>");
+            "Generator" + "<($jscomp.AsyncGeneratorWrapper$ActionRecord<undefined>|null),?,?>");
 
     test(
         lines(
@@ -272,16 +269,16 @@ public class RewriteAsyncIterationTest extends CompilerTestCase {
     Node newExpr = wrapper.getParent();
     Node innerGeneratorCall = newExpr.getSecondChild();
 
-    assertType(baz.getJSType()).toStringIsEqualTo("function(): AsyncGenerator<number>");
+    assertType(baz.getJSType()).toStringIsEqualTo("function(): AsyncGenerator<number,?,?>");
     assertType(wrapper.getJSType())
         .toStringIsEqualTo(
             "function(new:$jscomp.AsyncGeneratorWrapper, "
-                + "Generator<($jscomp.AsyncGeneratorWrapper$ActionRecord<number>|null)>): "
+                + "Generator<($jscomp.AsyncGeneratorWrapper$ActionRecord<number>|null),?,?>): "
                 + "undefined");
     assertType(newExpr.getJSType()).toStringIsEqualTo("$jscomp.AsyncGeneratorWrapper");
     assertType(innerGeneratorCall.getJSType())
         .toStringIsEqualTo(
-            "Generator" + "<($jscomp.AsyncGeneratorWrapper$ActionRecord<number>|null)>");
+            "Generator" + "<($jscomp.AsyncGeneratorWrapper$ActionRecord<number>|null),?,?>");
 
     test(
         lines(
@@ -358,20 +355,47 @@ public class RewriteAsyncIterationTest extends CompilerTestCase {
   @Test
   public void testThisInAsyncGeneratorNestedInAsyncGenerator() {
     test(
-        "async function* baz() { return async function*() { yield this; } }",
         lines(
-            "function baz() {",
+            "async function* baz(outerT = this) {",
+            "  return async function*(innerT = this) {",
+            "    yield innerT || this;",
+            "  }",
+            "}"),
+        lines(
+            // `this` in parameter list shouldn't be aliased
+            "function baz(outerT = this) {",
             "  return new $jscomp.AsyncGeneratorWrapper((function*() {",
-            "    return function() {",
+            // `this` in parameter list shouldn't be aliased
+            "    return function(innerT = this) {",
             "      const $jscomp$asyncIter$this = this;",
             "      return new $jscomp.AsyncGeneratorWrapper((function*() {",
+            // `this` in body should be aliased
             "        yield new $jscomp.AsyncGeneratorWrapper$ActionRecord(",
             "          $jscomp.AsyncGeneratorWrapper$ActionEnum.YIELD_VALUE,",
-            "          $jscomp$asyncIter$this);",
+            "          innerT || $jscomp$asyncIter$this);",
             "      })());",
             "    };",
             "  })());",
             "}"));
+  }
+
+  @Test
+  public void testThisInArrowNestedInAsyncGenerator() {
+    test(
+        lines(
+            "async function* baz() {",
+            // both instances of `this` musts be changed to aliases
+            "  return (t = this) => t || this;",
+            "}"),
+        lines(
+            "function baz() {",
+            "  const $jscomp$asyncIter$this = this;",
+            "  return new $jscomp.AsyncGeneratorWrapper((function*() {",
+            "    return (t = $jscomp$asyncIter$this) =>",
+            "        t || $jscomp$asyncIter$this;",
+            "      })());",
+            "}",
+            ""));
   }
 
   @Test
@@ -432,6 +456,10 @@ public class RewriteAsyncIterationTest extends CompilerTestCase {
 
   @Test
   public void testCannotConvertSuperGetElemInAsyncGenerator() {
+    // The rewriting gets partially done before we notice and report that we cannot convert
+    // the code. The partially done code is invalid, so we must disable AST validation to see the
+    // error message. (AST validation is not enabled in normal execution, just developer mode.)
+    disableAstValidation();
     testError(
         lines(
             "class A {",

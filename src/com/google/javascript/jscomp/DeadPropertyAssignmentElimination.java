@@ -19,8 +19,8 @@ package com.google.javascript.jscomp;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Predicates.alwaysTrue;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.PeekingIterator;
 import com.google.common.collect.Sets;
@@ -59,11 +59,6 @@ public class DeadPropertyAssignmentElimination implements CompilerPass {
 
   private final AbstractCompiler compiler;
 
-  // TODO(kevinoconnor): Try to give special treatment to constructor, else remove this field
-  // and cleanup dead code.
-  @VisibleForTesting
-  static final boolean ASSUME_CONSTRUCTORS_HAVENT_ESCAPED = false;
-
   DeadPropertyAssignmentElimination(AbstractCompiler compiler) {
     this.compiler = compiler;
   }
@@ -72,33 +67,24 @@ public class DeadPropertyAssignmentElimination implements CompilerPass {
   public void process(Node externs, Node root) {
     // GatherExternProperties must be enabled for this pass to safely know what property writes are
     // eligible for removal.
-    if (compiler.getExternProperties() == null) {
+    if (compiler.getExternProperties() == null || compiler.getAccessorSummary() == null) {
       return;
     }
 
-    GetterSetterCollector getterSetterCollector = new GetterSetterCollector();
-    NodeTraversal.traverse(compiler, root, getterSetterCollector);
+    Set<String> skiplistedPropNames =
+        Sets.union(
+            compiler.getAccessorSummary().getAccessors().keySet(), compiler.getExternProperties());
 
-    // If there's any potentially unknown getter/setter property, back off of the optimization.
-    if (getterSetterCollector.unknownGetterSetterPresent) {
-      return;
-    }
-
-    Set<String> blacklistedPropNames = Sets.union(
-        getterSetterCollector.propNames, compiler.getExternProperties());
-
-    NodeTraversal.traverseChangedFunctions(compiler, new FunctionVisitor(blacklistedPropNames));
+    NodeTraversal.traverseChangedFunctions(compiler, new FunctionVisitor(skiplistedPropNames));
   }
 
   private static class FunctionVisitor implements ChangeScopeRootCallback {
 
-    /**
-     * A set of properties names that are potentially unsafe to remove duplicate writes to.
-     */
-    private final Set<String> blacklistedPropNames;
+    /** A set of properties names that are potentially unsafe to remove duplicate writes to. */
+    private final Set<String> skiplistedPropNames;
 
-    FunctionVisitor(Set<String> blacklistedPropNames) {
-      this.blacklistedPropNames = blacklistedPropNames;
+    FunctionVisitor(Set<String> skiplistedPropNames) {
+      this.skiplistedPropNames = skiplistedPropNames;
     }
 
     @Override
@@ -108,12 +94,12 @@ public class DeadPropertyAssignmentElimination implements CompilerPass {
       }
 
       Node body = NodeUtil.getFunctionBody(root);
-      if (!body.hasChildren() || NodeUtil.containsFunction(body)) {
+      if (!body.hasChildren() || NodeUtil.has(body, Node::isFunction, alwaysTrue())) {
         return;
       }
 
       FindCandidateAssignmentTraversal traversal =
-          new FindCandidateAssignmentTraversal(blacklistedPropNames, NodeUtil.isConstructor(root));
+          new FindCandidateAssignmentTraversal(skiplistedPropNames);
       NodeTraversal.traverse(compiler, body, traversal);
 
       // Any candidate property assignment can have a write removed if that write is never read
@@ -243,19 +229,11 @@ public class DeadPropertyAssignmentElimination implements CompilerPass {
      */
     Map<String, Property> propertyMap = new HashMap<>();
 
-    /**
-     * A set of properties names that are potentially unsafe to remove duplicate writes to.
-     */
-    private final Set<String> blacklistedPropNames;
+    /** A set of properties names that are potentially unsafe to remove duplicate writes to. */
+    private final Set<String> skiplistedPropNames;
 
-    /**
-     * Whether or not the function being analyzed is a constructor.
-     */
-    private final boolean isConstructor;
-
-    FindCandidateAssignmentTraversal(Set<String> blacklistedPropNames, boolean isConstructor) {
-      this.blacklistedPropNames = blacklistedPropNames;
-      this.isConstructor = isConstructor;
+    FindCandidateAssignmentTraversal(Set<String> skiplistedPropNames) {
+      this.skiplistedPropNames = skiplistedPropNames;
     }
 
     /**
@@ -272,7 +250,7 @@ public class DeadPropertyAssignmentElimination implements CompilerPass {
       String propName =
           propNode.isGetProp() ? propNode.getLastChild().getString() : propNode.getQualifiedName();
 
-      Property property = propertyMap.computeIfAbsent(propName, name -> new Property(name));
+      Property property = propertyMap.computeIfAbsent(propName, Property::new);
 
       /* Using the GETPROP chain, build out the tree of children properties.
 
@@ -309,15 +287,7 @@ public class DeadPropertyAssignmentElimination implements CompilerPass {
 
       // Assume that all properties may be read when control flow leaves the function
       if (NodeUtil.isInvocation(n) || n.isYield() || n.isAwait()) {
-        if (ASSUME_CONSTRUCTORS_HAVENT_ESCAPED
-            && isConstructor
-            && !NodeUtil.referencesThis(n)
-            && NodeUtil.getEnclosingType(n, Token.TRY) == null) {
-          // this.x properties are okay.
-          markAllPropsReadExceptThisProps();
-        } else {
-          markAllPropsRead();
-        }
+        markAllPropsRead();
       }
 
       // Mark all properties as read when leaving a block since we haven't proven that the block
@@ -342,6 +312,10 @@ public class DeadPropertyAssignmentElimination implements CompilerPass {
         case AND:
         case OR:
         case HOOK:
+        case COALESCE:
+        case OPTCHAIN_CALL:
+        case OPTCHAIN_GETELEM:
+        case OPTCHAIN_GETPROP:
           return true;
         default:
           return false;
@@ -390,8 +364,7 @@ public class DeadPropertyAssignmentElimination implements CompilerPass {
       switch (n.getToken()) {
         case GETPROP:
           // Handle potential getters/setters.
-          if (n.isGetProp()
-              && blacklistedPropNames.contains(n.getLastChild().getString())) {
+          if (n.isGetProp() && skiplistedPropNames.contains(n.getLastChild().getString())) {
             // We treat getters/setters as if they were a call, thus we mark all properties as read.
             markAllPropsRead();
             return true;
@@ -445,127 +418,13 @@ public class DeadPropertyAssignmentElimination implements CompilerPass {
     }
 
     private void markAllPropsRead() {
-      markAllPropsReadHelper(false /* excludeThisProps*/);
-    }
-
-    private void markAllPropsReadExceptThisProps() {
-      markAllPropsReadHelper(true /* excludeThisProps */);
-    }
-
-    private void markAllPropsReadHelper(boolean excludeThisProps) {
       for (Property property : propertyMap.values()) {
         if (property.writes.isEmpty()) {
           continue;
         }
 
-        if (excludeThisProps && property.writes.getLast().isChildPropOf("this")) {
-          continue;
-        }
-
         property.markLastWriteRead();
       }
-    }
-  }
-
-  /**
-   * A traversal to find all property names that are defined to have a getter and/or setter
-   * associated with them.
-   */
-  private static class GetterSetterCollector implements Callback {
-
-    /**
-     * A set of properties names that are known to be assigned to getter/setters. This is important
-     * since any reference to these properties needs to be treated as if it were a call.
-     */
-    private final Set<String> propNames = new HashSet<>();
-
-    /**
-     * Whether or not a property might have a getter/setter but it could not be statically analyzed
-     * to determine which one.
-     */
-    private boolean unknownGetterSetterPresent = false;
-
-
-    @Override
-    public boolean shouldTraverse(NodeTraversal nodeTraversal, Node n, Node parent) {
-      // Don't traverse into $jscomp.inherits's definition; it uses Object.defineProperty to copy
-      // properties. It will not introduce a getter/setter that we haven't already seen.
-      if (n.isFunction()) {
-        String funcName = NodeUtil.getName(n);
-        if (funcName != null
-            && (funcName.equals("$jscomp.inherits") || funcName.equals("$jscomp$inherits"))) {
-          return false;
-        }
-      }
-
-      // Stop the traversal if there's a unknown getter/setter present.
-      return !unknownGetterSetterPresent;
-    }
-
-    @Override
-    public void visit(NodeTraversal t, Node n, Node parent) {
-      if (NodeUtil.isObjectDefinePropertyDefinition(n)) {
-        // We must assume any property in the compilation can be a getter/setter if the property
-        // name and what is being assigned to are aliased.
-        if (!n.getChildAtIndex(2).isString() && !n.getLastChild().isObjectLit()) {
-          unknownGetterSetterPresent = true;
-        } else if (!n.getLastChild().isObjectLit()) {
-          // If know the property name but not what it's being assigned to then we need to blacklist
-          // the property name.
-          propNames.add(n.getChildAtIndex(2).getString());
-        }
-        return;
-      } else if (NodeUtil.isObjectDefinePropertiesDefinition(n)
-          && !n.getChildAtIndex(2).isObjectLit()) {
-        // If the second param is not an object literal then we must assume any property in the
-        // compilation can be a getter/setter.
-        unknownGetterSetterPresent = true;
-        return;
-      }
-
-      // Keep track of any potential getters/setters.
-      if (NodeUtil.isGetterOrSetter(n)) {
-        Node grandparent = parent.getParent();
-        if (NodeUtil.isGetOrSetKey(n) && n.getString() != null) {
-          // ES5 getter/setter nodes contain the property name directly on the node.
-          propNames.add(n.getString());
-        } else if (NodeUtil.isObjectDefinePropertyDefinition(grandparent)) {
-          // Handle Object.defineProperties(obj, 'propName', { ... }).
-          Node propNode = grandparent.getChildAtIndex(2);
-          if (propNode.isString()) {
-            propNames.add(propNode.getString());
-          } else {
-            // Putting a getter/setter on an aliased property means any property can be a getter or
-            // setter.
-            unknownGetterSetterPresent = true;
-          }
-        } else if (grandparent.isStringKey()
-            && NodeUtil.isObjectDefinePropertiesDefinition(grandparent.getGrandparent())) {
-          // Handle Object.defineProperties(obj, {propName: { ... }}).
-          propNames.add(grandparent.getString());
-        }
-      } else if (isAliasedPropertySet(n)) {
-        // If we know this property is being injected but don't know if there's a getter/setter
-        // then the property still must be blacklisted.
-        propNames.add(n.getString());
-      }
-    }
-
-    /**
-     * Determines if the given keyNode contains an aliased property set. In particular this is only
-     * true if the grandparent is an {@code Object.defineProperties} call.
-     *
-     * <p>Ex. {@code Object.defineProperties(Foo.prototype, {bar: someObj}}.
-     */
-    private static boolean isAliasedPropertySet(Node keyNode) {
-      if (keyNode == null || !keyNode.isStringKey() || keyNode.getParent() == null) {
-        return false;
-      }
-
-      Node objectLit = keyNode.getParent();
-      return NodeUtil.isObjectDefinePropertiesDefinition(objectLit.getParent())
-          && objectLit.getParent().getLastChild() == objectLit
-          && !keyNode.getFirstChild().isObjectLit();
     }
   }
 }

@@ -20,10 +20,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
 import com.google.javascript.rhino.IR;
-import com.google.javascript.rhino.JSDocInfoBuilder;
-import com.google.javascript.rhino.JSTypeExpression;
 import com.google.javascript.rhino.Node;
-import com.google.javascript.rhino.Token;
 import com.google.javascript.rhino.jstype.JSType;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -131,7 +128,7 @@ public class Es6RewriteArrowFunction implements NodeTraversal.Callback, HotSwapC
     if (context.needsThisVar) {
       Node name = IR.name(THIS_VAR).setJSType(context.getThisType());
       Node thisVar = IR.constNode(name, IR.thisNode().setJSType(context.getThisType()));
-      NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.CONST_DECLARATIONS);
+      NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.CONST_DECLARATIONS, compiler);
       thisVar.useSourceInfoIfMissingFromForTree(scopeBody);
       makeTreeNonIndexable(thisVar);
 
@@ -150,16 +147,10 @@ public class Es6RewriteArrowFunction implements NodeTraversal.Callback, HotSwapC
       Node name = IR.name(ARGUMENTS_VAR).setJSType(context.getArgumentsType());
       Node argumentsVar =
           IR.constNode(name, IR.name("arguments").setJSType(context.getArgumentsType()));
-      NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.CONST_DECLARATIONS);
+      NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.CONST_DECLARATIONS, compiler);
       scopeBody.addChildToFront(argumentsVar);
 
-      JSDocInfoBuilder jsdoc = new JSDocInfoBuilder(false);
-      jsdoc.recordType(
-          new JSTypeExpression(
-              new Node(Token.BANG, IR.string("Arguments")), "<Es6RewriteArrowFunction>"));
-      argumentsVar.setJSDocInfo(jsdoc.build());
       argumentsVar.useSourceInfoIfMissingFromForTree(scopeBody);
-
       compiler.reportChangeToEnclosingScope(argumentsVar);
     }
   }

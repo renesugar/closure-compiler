@@ -18,12 +18,17 @@
 package com.google.javascript.jscomp;
 
 import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.javascript.jscomp.testing.JSCompCorrespondences.DESCRIPTION_EQUALITY;
+import static com.google.javascript.rhino.jstype.JSTypeNative.BOOLEAN_TYPE;
+import static com.google.javascript.rhino.jstype.JSTypeNative.NUMBER_TYPE;
+import static com.google.javascript.rhino.jstype.JSTypeNative.OBJECT_TYPE;
+import static com.google.javascript.rhino.jstype.JSTypeNative.STRING_TYPE;
+import static com.google.javascript.rhino.jstype.JSTypeNative.SYMBOL_TYPE;
 import static com.google.javascript.rhino.testing.TypeSubject.assertType;
 import static com.google.javascript.rhino.testing.TypeSubject.types;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
-import com.google.common.truth.Correspondence;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
 import com.google.javascript.rhino.JSTypeExpression;
@@ -36,44 +41,49 @@ import com.google.javascript.rhino.jstype.ObjectType;
 import com.google.javascript.rhino.jstype.RecordTypeBuilder;
 import com.google.javascript.rhino.jstype.TemplatizedType;
 import com.google.javascript.rhino.testing.TestErrorReporter;
-import java.util.Objects;
+import org.junit.After;
 import org.junit.Before;
 
-/**
- * This class is mostly used by passes testing the old type checker. Passes that run after type
- * checking and need type information use the class TypeICompilerTestCase.
- */
+/** This class is mostly used by passes testing {@link TypeCheck}. */
 abstract class CompilerTypeTestCase {
   protected static final Joiner LINE_JOINER = Joiner.on('\n');
 
-  static final String CLOSURE_DEFS = LINE_JOINER.join(
-      "/** @const */ var goog = {};",
-      "goog.inherits = function(x, y) {};",
-      "/** @type {!Function} */ goog.abstractMethod = function() {};",
-      "goog.isArray = function(x) {};",
-      "goog.isDef = function(x) {};",
-      "goog.isFunction = function(x) {};",
-      "goog.isNull = function(x) {};",
-      "goog.isString = function(x) {};",
-      "goog.isObject = function(x) {};",
-      "goog.isDefAndNotNull = function(x) {};",
-      "/** @const */ goog.array = {};",
-      // simplified ArrayLike definition
-      "/**",
-      " * @typedef {Array|{length: number}}",
-      " */",
-      "goog.array.ArrayLike;",
-      "/**",
-      " * @param {Array.<T>|{length:number}} arr",
-      " * @param {function(this:S, T, number, goog.array.ArrayLike):boolean} f",
-      " * @param {S=} opt_obj",
-      " * @return {!Array.<T>}",
-      " * @template T,S",
-      " */",
-      // return empty array to satisfy return type
-      "goog.array.filter = function(arr, f, opt_obj){ return []; };",
-      "goog.asserts = {};",
-      "/** @return {*} */ goog.asserts.assert = function(x) { return x; };");
+  static final String CLOSURE_DEFS =
+      LINE_JOINER.join(
+          "/** @const */ var goog = {};",
+          "goog.inherits = function(x, y) {};",
+          "/** @type {!Function} */ goog.abstractMethod = function() {};",
+          "goog.isArray = function(x) {};",
+          "goog.isDef = function(x) {};",
+          "goog.isFunction = function(x) {};",
+          "goog.isNull = function(x) {};",
+          "goog.isString = function(x) {};",
+          "goog.isObject = function(x) {};",
+          "goog.isDefAndNotNull = function(x) {};",
+          "/** @const */ goog.array = {};",
+          // simplified ArrayLike definition
+          "/**",
+          " * @typedef {Array|{length: number}}",
+          " */",
+          "goog.array.ArrayLike;",
+          "/**",
+          " * @param {Array<T>|{length:number}} arr",
+          " * @param {function(this:S, T, number, goog.array.ArrayLike):boolean} f",
+          " * @param {S=} obj",
+          " * @return {!Array<T>}",
+          " * @template T,S",
+          " */",
+          // return empty array to satisfy return type
+          "goog.array.filter = function(arr, f, obj){ return []; };",
+          "goog.asserts = {};",
+          "/** @return {*} */ goog.asserts.assert = function(x) { return x; };",
+          "goog.provide = function(ns) {};",
+          "goog.module = function(ns) {};",
+          "/** @return {?} */",
+          "goog.module.get = function(ns) {};",
+          "/** @return {?} */",
+          "goog.require = function(ns) {};",
+          "goog.loadModule = function(mod) {};");
 
   /**
    * A default set of externs for testing.
@@ -88,7 +98,9 @@ abstract class CompilerTypeTestCase {
 
   protected CompilerOptions getDefaultOptions() {
     CompilerOptions options = new CompilerOptions();
-    options.setLanguageIn(LanguageMode.ECMASCRIPT5);
+    options.setLanguageIn(LanguageMode.UNSUPPORTED);
+    options.setCodingConvention(getCodingConvention());
+
     options.setWarningLevel(
         DiagnosticGroups.MISSING_PROPERTIES, CheckLevel.WARNING);
     options.setWarningLevel(
@@ -97,7 +109,7 @@ abstract class CompilerTypeTestCase {
         DiagnosticGroups.INVALID_CASTS, CheckLevel.WARNING);
     options.setWarningLevel(DiagnosticGroups.LINT_CHECKS, CheckLevel.WARNING);
     options.setWarningLevel(DiagnosticGroups.JSDOC_MISSING_TYPE, CheckLevel.WARNING);
-    options.setCodingConvention(getCodingConvention());
+    options.setWarningLevel(DiagnosticGroups.BOUNDED_GENERICS, CheckLevel.WARNING);
     return options;
   }
 
@@ -119,8 +131,13 @@ abstract class CompilerTypeTestCase {
 
   @Before
   public void setUp() throws Exception {
-    errorReporter = new TestErrorReporter(null, null);
+    errorReporter = new TestErrorReporter();
     initializeNewCompiler(getDefaultOptions());
+  }
+
+  @After
+  public void validateWarningsAndErrors() {
+    errorReporter.verifyHasEncounteredAllWarningsAndErrors();
   }
 
   protected static String lines(String line) {
@@ -174,16 +191,16 @@ abstract class CompilerTypeTestCase {
   }
 
   protected final void assertTypeEquals(JSType a, JSType b) {
-    assertType(b).isStructurallyEqualTo(a);
+    assertType(b).isEqualTo(a);
   }
 
   protected final void assertTypeEquals(String msg, JSType a, JSType b) {
-    assertWithMessage(msg).about(types()).that(b).isStructurallyEqualTo(a);
+    assertWithMessage(msg).about(types()).that(b).isEqualTo(a);
   }
 
   /** Resolves a type expression, expecting the given warnings. */
   protected JSType resolve(JSTypeExpression n, String... warnings) {
-    errorReporter.setWarnings(warnings);
+    errorReporter.expectAllWarnings(warnings);
     return n.evaluate(null, registry);
   }
 
@@ -255,12 +272,8 @@ abstract class CompilerTypeTestCase {
     return getNativeFunctionType(JSTypeNative.REGEXP_FUNCTION_TYPE);
   }
 
-  protected FunctionType getNativeU2UConstructorType() {
-    return getNativeFunctionType(JSTypeNative.U2U_CONSTRUCTOR_TYPE);
-  }
-
-  protected FunctionType getNativeU2UFunctionType() {
-    return getNativeFunctionType(JSTypeNative.U2U_FUNCTION_TYPE);
+  protected FunctionType getNativeFunctionType() {
+    return getNativeFunctionType(JSTypeNative.FUNCTION_TYPE);
   }
 
   FunctionType getNativeFunctionType(JSTypeNative jsTypeNative) {
@@ -292,7 +305,7 @@ abstract class CompilerTypeTestCase {
   }
 
   protected JSType getNativeObjectNumberStringBooleanType() {
-    return getNativeType(JSTypeNative.OBJECT_NUMBER_STRING_BOOLEAN);
+    return registry.createUnionType(OBJECT_TYPE, NUMBER_TYPE, STRING_TYPE, BOOLEAN_TYPE);
   }
 
   protected JSType getNativeNumberStringBooleanType() {
@@ -300,11 +313,12 @@ abstract class CompilerTypeTestCase {
   }
 
   protected JSType getNativeObjectNumberStringBooleanSymbolType() {
-    return getNativeType(JSTypeNative.OBJECT_NUMBER_STRING_BOOLEAN_SYMBOL);
+    return registry.createUnionType(
+        OBJECT_TYPE, NUMBER_TYPE, STRING_TYPE, BOOLEAN_TYPE, SYMBOL_TYPE);
   }
 
-  protected JSType getNativeNumberStringBooleanSymbolType() {
-    return getNativeType(JSTypeNative.NUMBER_STRING_BOOLEAN_SYMBOL);
+  protected JSType getNativeValueTypes() {
+    return getNativeType(JSTypeNative.VALUE_TYPES);
   }
 
   JSType getNativeAllType() {
@@ -314,17 +328,4 @@ abstract class CompilerTypeTestCase {
   JSType getNativeType(JSTypeNative jsTypeNative) {
     return registry.getNativeType(jsTypeNative);
   }
-
-  static final Correspondence<JSError, String> DESCRIPTION_EQUALITY =
-      new Correspondence<JSError, String>() {
-        @Override
-        public boolean compare(JSError error, String description) {
-          return Objects.equals(error.description, description);
-        }
-
-        @Override
-        public String toString() {
-          return "has description equal to";
-        }
-      };
 }

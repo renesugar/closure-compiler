@@ -59,12 +59,10 @@ import java.util.Map;
 public class RecordType extends PrototypeObjectType {
   private static final long serialVersionUID = 1L;
 
+  private static final JSTypeClass TYPE_CLASS = JSTypeClass.RECORD;
+
   private final boolean declared;
   private boolean isFrozen = false;
-
-  RecordType(JSTypeRegistry registry, Map<String, RecordProperty> properties) {
-    this(registry, properties, true);
-  }
 
   /**
    * Creates a record type.
@@ -80,7 +78,7 @@ public class RecordType extends PrototypeObjectType {
    */
   RecordType(JSTypeRegistry registry, Map<String, RecordProperty> properties,
       boolean declared) {
-    super(registry, null, null);
+    super(PrototypeObjectType.builder(registry));
     setPrettyPrint(true);
     this.declared = declared;
 
@@ -100,6 +98,13 @@ public class RecordType extends PrototypeObjectType {
     }
     // Freeze the record type.
     isFrozen = true;
+
+    registry.getResolver().resolveIfClosed(this, TYPE_CLASS);
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return TYPE_CLASS;
   }
 
   /** @return Is this synthesized for internal bookkeeping? */
@@ -140,7 +145,9 @@ public class RecordType extends PrototypeObjectType {
         if (thatRecord.hasProperty(property)) {
           JSType thatPropertyType = thatRecord.getPropertyType(property);
           propType = thisPropertyType.getGreatestSubtype(thatPropertyType);
-          if (propType.isEquivalentTo(noType)) { return noType; }
+          if (propType.equals(noType)) {
+            return noType;
+          }
         } else {
           propType = thisPropertyType;
         }
@@ -170,12 +177,13 @@ public class RecordType extends PrototypeObjectType {
       // 2) Take the intersection of all of these unions.
       for (String propName : getOwnPropertyNames()) {
         JSType propType = getPropertyType(propName);
-        UnionTypeBuilder builder = UnionTypeBuilder.create(registry);
-        for (ObjectType alt :
-          registry.getEachReferenceTypeWithProperty(propName)) {
+        UnionType.Builder builder = UnionType.builder(registry);
+        for (ObjectType alt : registry.getEachReferenceTypeWithProperty(propName)) {
           JSType altPropType = alt.getPropertyType(propName);
-          if (altPropType != null && !alt.isEquivalentTo(this)
-              && alt.isSubtypeOf(that) && altPropType.isSubtypeOf(propType)) {
+          if (altPropType != null
+              && !alt.equals(this)
+              && alt.isSubtypeOf(that)
+              && altPropType.isSubtypeOf(propType)) {
             builder.addAlternate(alt);
           }
         }
@@ -193,33 +201,5 @@ public class RecordType extends PrototypeObjectType {
   @Override
   public boolean isStructuralType() {
     return true;
-  }
-
-  @Override
-  public boolean isSubtype(JSType that) {
-    return this.isSubtype(that, ImplCache.create(), SubtypingMode.NORMAL);
-  }
-
-  @Override
-  protected boolean isSubtype(JSType that,
-      ImplCache implicitImplCache, SubtypingMode subtypingMode) {
-    if (JSType.isSubtypeHelper(this, that, implicitImplCache, subtypingMode)) {
-      return true;
-    }
-
-    // Top of the record types is the empty record, or OBJECT_TYPE.
-    if (registry.getNativeObjectType(
-            JSTypeNative.OBJECT_TYPE).isSubtype(that, implicitImplCache, subtypingMode)) {
-      return true;
-    }
-
-    // A type is a subtype of a record type if it itself is a record
-    // type and it has at least the same members as the parent record type
-    // with the same types.
-    if (!that.isRecordType()) {
-      return false;
-    }
-
-    return this.isStructuralSubtype(that.toMaybeRecordType(), implicitImplCache, subtypingMode);
   }
 }

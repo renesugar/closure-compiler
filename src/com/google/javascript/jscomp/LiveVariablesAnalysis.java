@@ -43,15 +43,11 @@ import javax.annotation.Nullable;
  * <p>Due to the possibility of inner functions and closures, certain "local" variables can escape
  * the function. These variables will be considered as global and they can be retrieved with {@link
  * #getEscapedLocals()}.
- *
- * @author simranarora@google.com (Simran Arora)
  */
 class LiveVariablesAnalysis
     extends DataFlowAnalysis<Node, LiveVariablesAnalysis.LiveVariableLattice> {
 
   static final int MAX_VARIABLES_TO_ANALYZE = 100;
-
-  public static final String ARGUMENT_ARRAY_ALIAS = "arguments";
 
   private static class LiveVariableJoinOp implements JoinOp<LiveVariableLattice> {
     @Override
@@ -144,7 +140,7 @@ class LiveVariablesAnalysis
       Scope jsScope,
       @Nullable Scope jsScopeChild,
       AbstractCompiler compiler,
-      Es6SyntacticScopeCreator scopeCreator) {
+      SyntacticScopeCreator scopeCreator) {
     super(cfg, new LiveVariableJoinOp());
     checkState(jsScope.isFunctionScope(), jsScope);
 
@@ -213,7 +209,7 @@ class LiveVariablesAnalysis
 
     // Make kills conditional if the node can end abruptly by an exception.
     boolean conditional = false;
-    List<DiGraphEdge<Node, Branch>> edgeList = getCfg().getOutEdges(node);
+    List<? extends DiGraphEdge<Node, Branch>> edgeList = getCfg().getOutEdges(node);
     for (DiGraphEdge<Node, Branch> edge : edgeList) {
       if (Branch.ON_EX.equals(edge.getValue())) {
         conditional = true;
@@ -301,9 +297,21 @@ class LiveVariablesAnalysis
 
       case AND:
       case OR:
+      case COALESCE:
+      case OPTCHAIN_GETELEM:
+      case OPTCHAIN_GETPROP:
         computeGenKill(n.getFirstChild(), gen, kill, conditional);
         // May short circuit.
         computeGenKill(n.getLastChild(), gen, kill, true);
+        return;
+
+      case OPTCHAIN_CALL:
+        computeGenKill(n.getFirstChild(), gen, kill, conditional);
+        // Unlike OPTCHAIN_GETPROP and OPTCHAIN_GETELEM, the OPTCHAIN_CALLs can have multiple
+        // children on rhs which get executed conditionally
+        for (Node c = n.getSecondChild(); c != null; c = c.getNext()) {
+          computeGenKill(c, gen, kill, true);
+        }
         return;
 
       case HOOK:
@@ -314,7 +322,7 @@ class LiveVariablesAnalysis
         return;
 
       case NAME:
-        if (isArgumentsName(n)) {
+        if (n.getString().equals("arguments")) {
           markAllParametersEscaped();
         } else if (!NodeUtil.isLhsByDestructuring(n)) {
           // Only add names in destructuring patterns if they're not lvalues.
@@ -394,29 +402,26 @@ class LiveVariablesAnalysis
   }
 
   /**
-   * Give up computing liveness of formal parameter by putting all the parameter names in the
+   * Give up computing liveness of formal parameters by putting all the simple parameters in the
    * escaped set.
+   *
+   * <p>This only applies to simple parameters, that is NAMEs, because other parameter syntaxes
+   * never need to be escaped in this way. The known applications of this method are for uses of
+   * `arguments`, and for IE8. In a function with non-simple paremeters, `arguments` is not
+   * parameter-mapped, and so referencing it doesn't escape paremeters. IE8 just doess't support
+   * non-simple parameters.
+   *
+   * <p>We could actaully continue tracking simple parameters if any parameter is non-simple, but it
+   * wasn't worth the complexity or cost to do so.
+   *
+   * @see https://tc39.github.io/ecma262/#sec-functiondeclarationinstantiation
    */
   void markAllParametersEscaped() {
     Node paramList = NodeUtil.getFunctionParameters(jsScope.getRootNode());
-    for (Node arg = paramList.getFirstChild(); arg != null; arg = arg.getNext()) {
-      if (arg.isRest() || arg.isDefaultValue()) {
-        escaped.add(jsScope.getVar(arg.getFirstChild().getString()));
-      } else {
-        escaped.add(jsScope.getVar(arg.getString()));
+    for (Node param = paramList.getFirstChild(); param != null; param = param.getNext()) {
+      if (param.isName()) {
+        escaped.add(jsScope.getVar(param.getString()));
       }
     }
-  }
-
-  private boolean isArgumentsName(Node n) {
-    boolean childDeclared;
-    if (jsScopeChild != null) {
-      childDeclared = jsScopeChild.hasOwnSlot(ARGUMENT_ARRAY_ALIAS);
-    } else {
-      childDeclared = true;
-    }
-    return n.isName()
-        && n.getString().equals(ARGUMENT_ARRAY_ALIAS)
-        && (!jsScope.hasOwnSlot(ARGUMENT_ARRAY_ALIAS) || !childDeclared);
   }
 }

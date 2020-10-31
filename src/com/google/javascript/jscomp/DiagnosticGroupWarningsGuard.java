@@ -18,7 +18,6 @@ package com.google.javascript.jscomp;
 
 /**
  * Sets the level for a particular DiagnosticGroup.
- * @author nicksantos@google.com (Nick Santos)
  */
 public class DiagnosticGroupWarningsGuard extends WarningsGuard {
   private static final long serialVersionUID = 1L;
@@ -52,13 +51,6 @@ public class DiagnosticGroupWarningsGuard extends WarningsGuard {
       }
     }
     return false;
-  }
-
-  @Override
-  protected WarningsGuard makeNonStrict() {
-    return new DiagnosticGroupWarningsGuard(
-        this.group,
-        this.level.isOn() ? CheckLevel.WARNING : CheckLevel.OFF);
   }
 
   @Override

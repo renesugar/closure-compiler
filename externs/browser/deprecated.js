@@ -19,7 +19,6 @@
  * but are still needed in some project's build.
  * @externs
  */
-
 var opera = {};
 
 opera.postError;
@@ -31,15 +30,18 @@ opera.version = function() {};
 function XSLTProcessor() {}
 
 /**
- * @constructor
- * @extends {HTMLOptionElement}
- * @param {*=} opt_text
- * @param {*=} opt_value
- * @param {*=} opt_defaultSelected
- * @param {*=} opt_selected
+ * @param {Node} styleSheet
+ * @return {undefined}
+ * @deprecated
  */
-function Option(opt_text, opt_value, opt_defaultSelected, opt_selected) {}
+XSLTProcessor.importStylesheet = function(styleSheet) {};
 
+/**
+ * @param {Node} source
+ * @return {Document}
+ * @deprecated
+ */
+XSLTProcessor.transformToDocument = function(source) {};
 
 // The "methods" object is a place to hang arbitrary external
 // properties. It is a throwback to pre-typed days, and should

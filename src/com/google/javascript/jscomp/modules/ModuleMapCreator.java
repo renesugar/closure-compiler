@@ -22,7 +22,6 @@ import com.google.common.collect.Sets;
 import com.google.javascript.jscomp.AbstractCompiler;
 import com.google.javascript.jscomp.DiagnosticType;
 import com.google.javascript.jscomp.HotSwapCompilerPass;
-import com.google.javascript.jscomp.JSError;
 import com.google.javascript.jscomp.NodeUtil;
 import com.google.javascript.jscomp.deps.ModuleLoader;
 import com.google.javascript.jscomp.deps.ModuleLoader.ModulePath;
@@ -39,6 +38,15 @@ public class ModuleMapCreator implements HotSwapCompilerPass {
   public static final DiagnosticType MISSING_NAMESPACE_IMPORT =
       DiagnosticType.error(
           "JSC_MISSING_NAMESPACE_IMPORT", "Imported Closure namespace \"{0}\" never defined.");
+
+  public static final DiagnosticType DOES_NOT_HAVE_EXPORT =
+      DiagnosticType.error(
+          "JSC_DOES_NOT_HAVE_EXPORT", "Requested module does not have an export \"{0}\".");
+
+  public static final DiagnosticType DOES_NOT_HAVE_EXPORT_WITH_DETAILS =
+      DiagnosticType.error(
+          "JSC_DOES_NOT_HAVE_EXPORT_WITH_DETAILS",
+          "Requested module does not have an export \"{0}\".{1}");
 
   private final class ModuleRequestResolverImpl implements ModuleRequestResolver {
     private UnresolvedModule getFallbackForMissingNonClosureModule(ModuleLoader.ModulePath path) {
@@ -69,8 +77,8 @@ public class ModuleMapCreator implements HotSwapCompilerPass {
         }
 
         @Override
-        boolean isEsModule() {
-          return true;
+        ModuleMetadata metadata() {
+          return metadata;
         }
 
         @Override
@@ -121,6 +129,9 @@ public class ModuleMapCreator implements HotSwapCompilerPass {
     @Override
     @Nullable
     public UnresolvedModule resolve(Import i) {
+      if (i.modulePath() == null) {
+        return resolveForClosure(i.moduleRequest());
+      }
       return resolve(i.moduleRequest(), i.modulePath(), i.importNode());
     }
 
@@ -131,23 +142,24 @@ public class ModuleMapCreator implements HotSwapCompilerPass {
     }
 
     @Nullable
+    private UnresolvedModule resolveForClosure(String namespace) {
+      return unresolvedModulesByClosureNamespace.computeIfAbsent(
+          namespace, this::getFallbackForMissingClosureModule);
+    }
+
+    @Nullable
     private UnresolvedModule resolve(
         String moduleRequest, ModuleLoader.ModulePath modulePath, Node forLineInfo) {
+
       if (GoogEsImports.isGoogImportSpecifier(moduleRequest)) {
         String namespace = GoogEsImports.getClosureIdFromGoogImportSpecifier(moduleRequest);
-        UnresolvedModule module = unresolvedModulesByClosureNamespace.get(namespace);
-        if (module == null) {
-          compiler.report(JSError.make(forLineInfo, MISSING_NAMESPACE_IMPORT, namespace));
-          module = getFallbackForMissingClosureModule(namespace);
-          unresolvedModulesByClosureNamespace.put(namespace, module);
-        }
-        return module;
+        return resolveForClosure(namespace);
       }
 
       ModuleLoader.ModulePath requestedPath =
           modulePath.resolveJsModule(
               moduleRequest,
-              modulePath.toString(),
+              forLineInfo.getSourceFileName(),
               forLineInfo.getLineno(),
               forLineInfo.getCharno());
 
@@ -172,6 +184,7 @@ public class ModuleMapCreator implements HotSwapCompilerPass {
 
   private final AbstractCompiler compiler;
   private final EsModuleProcessor esModuleProcessor;
+  private final ClosureModuleProcessor closureModuleProcessor;
   private final NonEsModuleProcessor nonEsModuleProcessor;
   private final Map<String, UnresolvedModule> unresolvedModules;
   private final Map<String, UnresolvedModule> unresolvedModulesByClosureNamespace;
@@ -181,6 +194,7 @@ public class ModuleMapCreator implements HotSwapCompilerPass {
     this.compiler = compiler;
     this.moduleMetadataMap = moduleMetadataMap;
     this.esModuleProcessor = new EsModuleProcessor(compiler);
+    this.closureModuleProcessor = new ClosureModuleProcessor(compiler);
     this.nonEsModuleProcessor = new NonEsModuleProcessor();
     unresolvedModules = new HashMap<>();
     unresolvedModulesByClosureNamespace = new HashMap<>();
@@ -245,8 +259,19 @@ public class ModuleMapCreator implements HotSwapCompilerPass {
   }
 
   private void process(ModuleMetadata moduleMetadata) {
-    ModuleProcessor processor =
-        moduleMetadata.isEs6Module() ? esModuleProcessor : nonEsModuleProcessor;
+    final ModuleProcessor processor;
+    switch (moduleMetadata.moduleType()) {
+      case ES6_MODULE:
+        processor = esModuleProcessor;
+        break;
+      case GOOG_MODULE:
+      case LEGACY_GOOG_MODULE:
+        processor = closureModuleProcessor;
+        break;
+      default:
+        processor = nonEsModuleProcessor;
+        break;
+    }
     UnresolvedModule module =
         processor.process(moduleMetadata, moduleMetadata.path(), moduleMetadata.rootNode());
 

@@ -21,6 +21,7 @@ import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.JSDocInfoBuilder;
 import com.google.javascript.rhino.JSTypeExpression;
 import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.StaticSourceFile.SourceKind;
 import com.google.javascript.rhino.Token;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -29,7 +30,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
 import javax.annotation.Nullable;
 
 /**
@@ -48,10 +48,11 @@ public class ChromePass extends AbstractPostOrderCallback implements CompilerPas
   private final Set<String> createdObjects;
 
   private static final String CR_DEFINE = "cr.define";
-  private static final String CR_EXPORT_PATH = "cr.exportPath";
   private static final String OBJECT_DEFINE_PROPERTY = "Object.defineProperty";
   private static final String CR_DEFINE_PROPERTY = "cr.defineProperty";
-  private static final String CR_MAKE_PUBLIC = "cr.makePublic";
+  private static final String VIRTUAL_FILE = "<ChromePass.java>";
+  private static final Node VIRTUAL_NODE =
+      IR.empty().setStaticSourceFile(new SourceFile(VIRTUAL_FILE, SourceKind.EXTERN));
 
   private static final String CR_DEFINE_COMMON_EXPLANATION =
       "It should be called like this:"
@@ -61,11 +62,6 @@ public class ChromePass extends AbstractPostOrderCallback implements CompilerPas
       DiagnosticType.error(
           "JSC_CR_DEFINE_WRONG_NUMBER_OF_ARGUMENTS",
           "cr.define() should have exactly 2 arguments. " + CR_DEFINE_COMMON_EXPLANATION);
-
-  static final DiagnosticType CR_EXPORT_PATH_TOO_FEW_ARGUMENTS =
-      DiagnosticType.error(
-          "JSC_CR_EXPORT_PATH_TOO_FEW_ARGUMENTS",
-          "cr.exportPath() should have at least 1 argument: path name.");
 
   static final DiagnosticType CR_DEFINE_INVALID_FIRST_ARGUMENT =
       DiagnosticType.error(
@@ -84,26 +80,16 @@ public class ChromePass extends AbstractPostOrderCallback implements CompilerPas
               + " dictionary in its last statement. "
               + CR_DEFINE_COMMON_EXPLANATION);
 
+  static final DiagnosticType CR_DEFINE_PROPERTY_TOO_FEW_ARGUMENTS =
+      DiagnosticType.error(
+          "JSC_CR_DEFINE_PROPERTY_TOO_FEW_ARGUMENTS",
+          "cr.defineProperty() requires at least 2 arguments.");
+
   static final DiagnosticType CR_DEFINE_PROPERTY_INVALID_PROPERTY_KIND =
       DiagnosticType.error(
           "JSC_CR_DEFINE_PROPERTY_INVALID_PROPERTY_KIND",
           "Invalid cr.PropertyKind passed to cr.defineProperty(): expected ATTR,"
               + " BOOL_ATTR or JS, found \"{0}\".");
-
-  static final DiagnosticType CR_MAKE_PUBLIC_HAS_NO_JSDOC =
-      DiagnosticType.error(
-          "JSC_CR_MAKE_PUBLIC_HAS_NO_JSDOC",
-          "Private method exported by cr.makePublic() has no JSDoc.");
-
-  static final DiagnosticType CR_MAKE_PUBLIC_MISSED_DECLARATION =
-      DiagnosticType.error(
-          "JSC_CR_MAKE_PUBLIC_MISSED_DECLARATION",
-          "Method \"{1}_\" exported by cr.makePublic() on \"{0}\" has no declaration.");
-
-  static final DiagnosticType CR_MAKE_PUBLIC_INVALID_SECOND_ARGUMENT =
-      DiagnosticType.error(
-          "JSC_CR_MAKE_PUBLIC_INVALID_SECOND_ARGUMENT",
-          "Invalid second argument passed to cr.makePublic(): should be array of strings.");
 
   public ChromePass(AbstractCompiler compiler) {
     this.compiler = compiler;
@@ -122,30 +108,39 @@ public class ChromePass extends AbstractPostOrderCallback implements CompilerPas
       Node callee = node.getFirstChild();
       if (callee.matchesQualifiedName(CR_DEFINE)) {
         visitNamespaceDefinition(node, parent);
-      } else if (callee.matchesQualifiedName(CR_EXPORT_PATH)) {
-        visitExportPath(node, parent);
       } else if (callee.matchesQualifiedName(OBJECT_DEFINE_PROPERTY)
           || callee.matchesQualifiedName(CR_DEFINE_PROPERTY)) {
         visitPropertyDefinition(node, parent);
-      } else if (callee.matchesQualifiedName(CR_MAKE_PUBLIC)) {
-        visitMakePublic(node, parent);
       }
     }
   }
 
   private void visitPropertyDefinition(Node call, Node parent) {
     Node callee = call.getFirstChild();
+    boolean isCrDefinePropertyCall = callee.matchesQualifiedName(CR_DEFINE_PROPERTY);
+
+    if (isCrDefinePropertyCall) {
+      if (call.getChildCount() < 3) {
+        compiler.report(JSError.make(call, CR_DEFINE_PROPERTY_TOO_FEW_ARGUMENTS));
+        return;
+      }
+    } else if (call.getChildCount() < 4) {
+      // Note: Object.defineProperty() with less than 3 args throws at runtime.
+      // We could also report some type of error here, but it seems odd to do this from the
+      // ChromePass as there's nothing particularly Chrome-specific about Object.defineProperty()
+      // with too few args.
+      return;
+    }
+
     String target = call.getSecondChild().getQualifiedName();
-    if (callee.matchesQualifiedName(CR_DEFINE_PROPERTY) && !target.endsWith(".prototype")) {
+    if (isCrDefinePropertyCall && !target.endsWith(".prototype")) {
       target += ".prototype";
     }
 
     Node property = call.getChildAtIndex(2);
-
     Node getPropNode =
         NodeUtil.newQName(compiler, target + "." + property.getString()).srcrefTree(call);
 
-    boolean isCrDefinePropertyCall = callee.matchesQualifiedName(CR_DEFINE_PROPERTY);
     if (isCrDefinePropertyCall) {
       // The 3rd argument (PropertyKind) is actually used at runtime, so it takes precedence.
       Node propertyType = getTypeByCrPropertyKind(call.getChildAtIndex(3));
@@ -196,113 +191,8 @@ public class ChromePass extends AbstractPostOrderCallback implements CompilerPas
 
   private static void setJsDocWithType(Node target, Node type) {
     JSDocInfoBuilder builder = new JSDocInfoBuilder(false);
-    builder.recordType(new JSTypeExpression(type, "<ChromePass.java>"));
+    builder.recordType(new JSTypeExpression(type.srcrefTree(VIRTUAL_NODE), VIRTUAL_FILE));
     target.setJSDocInfo(builder.build());
-  }
-
-  private void visitMakePublic(Node call, Node exprResult) {
-    Node scope = exprResult.getParent();
-    String className = call.getSecondChild().getQualifiedName();
-    String prototype = className + ".prototype";
-    Node methods = call.getChildAtIndex(2);
-
-    if (methods == null || !methods.isArrayLit()) {
-      compiler.report(JSError.make(exprResult, CR_MAKE_PUBLIC_INVALID_SECOND_ARGUMENT));
-      return;
-    }
-
-    Set<String> methodNames = new HashSet<>();
-    for (Node methodName : methods.children()) {
-      if (!methodName.isString()) {
-        compiler.report(JSError.make(methodName, CR_MAKE_PUBLIC_INVALID_SECOND_ARGUMENT));
-        return;
-      }
-      methodNames.add(methodName.getString());
-    }
-
-    for (Node child : scope.children()) {
-      if (isAssignmentToPrototype(child, prototype)) {
-        Node objectLit = child.getFirstChild().getSecondChild();
-        for (Node stringKey : objectLit.children()) {
-          String field = stringKey.getString();
-          maybeAddPublicDeclaration(field, methodNames, className, stringKey, scope, exprResult);
-        }
-      } else if (isAssignmentToPrototypeMethod(child, prototype)) {
-        Node assignNode = child.getFirstChild();
-        String qualifiedName = assignNode.getFirstChild().getQualifiedName();
-        String field = qualifiedName.substring(qualifiedName.lastIndexOf('.') + 1);
-        maybeAddPublicDeclaration(field, methodNames, className, assignNode, scope, exprResult);
-      } else if (isDummyPrototypeMethodDeclaration(child, prototype)) {
-        String qualifiedName = child.getFirstChild().getQualifiedName();
-        String field = qualifiedName.substring(qualifiedName.lastIndexOf('.') + 1);
-        maybeAddPublicDeclaration(
-            field, methodNames, className, child.getFirstChild(), scope, exprResult);
-      }
-    }
-
-    for (String missedDeclaration : methodNames) {
-      compiler.report(
-          JSError.make(
-              exprResult, CR_MAKE_PUBLIC_MISSED_DECLARATION, className, missedDeclaration));
-    }
-  }
-
-  private static boolean isAssignmentToPrototype(Node node, String prototype) {
-    Node assignNode;
-    return node.isExprResult()
-        && (assignNode = node.getFirstChild()).isAssign()
-        && assignNode.getFirstChild().matchesQualifiedName(prototype);
-  }
-
-  private static boolean isAssignmentToPrototypeMethod(Node node, String prototype) {
-    Node assignNode;
-    return node.isExprResult()
-        && (assignNode = node.getFirstChild()).isAssign()
-        && assignNode.getFirstChild().getQualifiedName().startsWith(prototype + ".");
-  }
-
-  private static boolean isDummyPrototypeMethodDeclaration(Node node, String prototype) {
-    Node getPropNode;
-    return node.isExprResult()
-        && (getPropNode = node.getFirstChild()).isGetProp()
-        && getPropNode.getQualifiedName().startsWith(prototype + ".");
-  }
-
-  private void maybeAddPublicDeclaration(
-      String field,
-      Set<String> publicAPIStrings,
-      String className,
-      Node jsDocSourceNode,
-      Node scope,
-      Node exprResult) {
-    if (field.endsWith("_")) {
-      String publicName = field.substring(0, field.length() - 1);
-      if (publicAPIStrings.contains(publicName)) {
-        Node methodDeclaration = NodeUtil.newQName(compiler, className + "." + publicName);
-        if (jsDocSourceNode.getJSDocInfo() != null) {
-          methodDeclaration.setJSDocInfo(jsDocSourceNode.getJSDocInfo());
-          Node publicDeclaration = IR.exprResult(methodDeclaration).srcrefTree(exprResult);
-          scope.addChildBefore(publicDeclaration, exprResult);
-          compiler.reportChangeToEnclosingScope(publicDeclaration);
-        } else {
-          compiler.report(JSError.make(jsDocSourceNode, CR_MAKE_PUBLIC_HAS_NO_JSDOC));
-        }
-        publicAPIStrings.remove(publicName);
-      }
-    }
-  }
-
-  private void visitExportPath(Node crExportPathNode, Node parent) {
-    if (crExportPathNode.getChildCount() < 2) {
-      compiler.report(JSError.make(crExportPathNode, CR_EXPORT_PATH_TOO_FEW_ARGUMENTS));
-      return;
-    }
-
-    Node pathArg = crExportPathNode.getSecondChild();
-    if (pathArg.isString()) {
-      // TODO(dbeam): support cr.exportPath('ns').value.
-      createAndInsertObjectsForQualifiedName(parent, pathArg.getString());
-    }
   }
 
   private void createAndInsertObjectsForQualifiedName(Node scriptChild, String namespace) {

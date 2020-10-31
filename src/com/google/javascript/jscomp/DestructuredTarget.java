@@ -24,11 +24,6 @@ import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.jstype.JSType;
 import com.google.javascript.rhino.jstype.JSTypeNative;
 import com.google.javascript.rhino.jstype.JSTypeRegistry;
-import com.google.javascript.rhino.jstype.ObjectType;
-import com.google.javascript.rhino.jstype.RecordTypeBuilder;
-import com.google.javascript.rhino.jstype.TemplateTypeMap;
-import java.util.HashSet;
-import java.util.Set;
 import javax.annotation.Nullable;
 
 /**
@@ -39,7 +34,7 @@ import javax.annotation.Nullable;
  * that a caller can get information about a target, use that information to do additional type
  * inference, and finally call {@code inferType} if desired.
  */
-final class DestructuredTarget {
+public final class DestructuredTarget {
   private final JSTypeRegistry registry;
   /**
    * Holds the STRING_KEY or COMPUTED_PROPERTY for a target in an object pattern. Null for targets
@@ -87,30 +82,30 @@ final class DestructuredTarget {
 
   /** Returns a COMPUTED_PROP node or null */
   @Nullable
-  Node getComputedProperty() {
+  public Node getComputedProperty() {
     return hasComputedProperty() ? objectPatternKey : null;
   }
 
-  boolean hasComputedProperty() {
+  public boolean hasComputedProperty() {
     return objectPatternKey != null && objectPatternKey.isComputedProp();
   }
 
-  boolean hasStringKey() {
+  public boolean hasStringKey() {
     return objectPatternKey != null && objectPatternKey.isStringKey();
   }
 
   /** Returns a STRING_KEY node or null */
   @Nullable
-  Node getStringKey() {
+  public Node getStringKey() {
     return hasStringKey() ? objectPatternKey : null;
   }
 
   @Nullable
-  Node getDefaultValue() {
+  public Node getDefaultValue() {
     return defaultValue;
   }
 
-  boolean hasDefaultValue() {
+  public boolean hasDefaultValue() {
     return defaultValue != null;
   }
 
@@ -215,7 +210,8 @@ final class DestructuredTarget {
         builder.setDefaultValue(destructuringChild.getSecondChild());
         break;
 
-      case REST:
+      case ITER_REST:
+      case OBJECT_REST:
         // const [...x] = ...
         // const {...x} = ...
         builder.setNode(destructuringChild.getFirstChild());
@@ -229,20 +225,12 @@ final class DestructuredTarget {
     return builder.build();
   }
 
-  Supplier<JSType> getInferredTypeSupplier() {
-    return () -> inferType();
-  }
-
-  Supplier<JSType> getInferredTypeSupplierWithoutDefaultValue() {
-    return () -> inferTypeWithoutUsingDefaultValue();
-  }
-
   /**
    * Returns all the targets directly in the given pattern, except for EMPTY nodes
    *
    * <p>EMPTY nodes occur in array patterns with elisions, e.g. `[, , a] = []`
    */
-  static ImmutableList<DestructuredTarget> createAllNonEmptyTargetsInPattern(
+  public static ImmutableList<DestructuredTarget> createAllNonEmptyTargetsInPattern(
       JSTypeRegistry registry, JSType patternType, Node pattern) {
     return createAllNonEmptyTargetsInPattern(registry, () -> patternType, pattern);
   }
@@ -252,7 +240,7 @@ final class DestructuredTarget {
    *
    * <p>EMPTY nodes occur in array patterns with elisions, e.g. `[, , a] = []`
    */
-  static ImmutableList<DestructuredTarget> createAllNonEmptyTargetsInPattern(
+  public static ImmutableList<DestructuredTarget> createAllNonEmptyTargetsInPattern(
       JSTypeRegistry registry, Supplier<JSType> patternType, Node pattern) {
     checkArgument(pattern.isDestructuringPattern(), pattern);
     ImmutableList.Builder<DestructuredTarget> builder = ImmutableList.builder();
@@ -301,7 +289,9 @@ final class DestructuredTarget {
   private JSType inferObjectPatternKeyType() {
     JSType patternType = patternTypeSupplier.get();
     if (isRest) {
-      return inferObjectRestType(patternType);
+      // TODO(b/128355893): Do smarter inferrence. There are a lot of potential issues with
+      // inference on object-rest, so for now we just give up and say `Object`.
+      return registry.getNativeType(JSTypeNative.OBJECT_TYPE);
     }
 
     if (patternType == null || patternType.isUnknownType()) {
@@ -326,62 +316,12 @@ final class DestructuredTarget {
     }
   }
 
-  private JSType inferObjectRestType(JSType patternType) {
-    ObjectType objectType = registry.getNativeObjectType(JSTypeNative.OBJECT_TYPE);
-    if (patternType == null) {
-      return objectType;
-    }
-
-    ObjectType patternObjectType = patternType.dereference();
-    if (patternObjectType == null) {
-      return objectType;
-    }
-
-    // handle the case where it is a templatized object, e.g. Object<number,string>
-    TemplateTypeMap templates = patternObjectType.getTemplateTypeMap();
-    if (templates.hasTemplateKey(registry.getObjectIndexKey())) {
-      return registry.createTemplatizedType(
-          objectType,
-          templates.getResolvedTemplateType(registry.getObjectIndexKey()),
-          templates.getResolvedTemplateType(registry.getObjectElementKey()));
-    }
-
-    // Otherwise, try to infer what properties the rest will have based on the other destructuring
-    // keys.
-    Set<String> otherKeys = new HashSet<>();
-    for (Node child : pattern.children()) {
-      if (child.isRest()) {
-        break;
-      }
-      if (child.isComputedProp()) {
-        // we don't know what properties are being accessed after all
-        return objectType;
-      }
-
-      otherKeys.add(child.getString());
-    }
-
-    // return a new record type containing all the properties on `patternObjectType` minus those
-    // included in `otherKeys`
-    // e.g. `const {a, ...rest} = {a: 3, b: 4}` -> type `rest` is `{b: number}`
-    RecordTypeBuilder builder = new RecordTypeBuilder(registry);
-    for (String propertyName : patternObjectType.getOwnPropertyNames()) {
-      if (!otherKeys.contains(propertyName)) {
-        builder.addProperty(
-            propertyName,
-            patternObjectType.getPropertyType(propertyName),
-            patternObjectType.getPropertyNode(propertyName));
-      }
-    }
-    return builder.build();
-  }
-
   private JSType inferArrayPatternTargetType() {
     JSType patternType = patternTypeSupplier.get();
 
     // e.g. get `number` from `!Iterable<number>`
     JSType templateTypeOfIterable =
-        patternType.getInstantiatedTypeArgument(registry.getNativeType(JSTypeNative.ITERABLE_TYPE));
+        patternType.getTemplateTypeMap().getResolvedTemplateType(registry.getIterableTemplate());
 
     if (isRest) {
       // return `!Array<number>`

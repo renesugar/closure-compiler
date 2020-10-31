@@ -16,8 +16,6 @@
 package com.google.javascript.jscomp;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.javascript.jscomp.Es6RewriteClass.CLASS_REASSIGNMENT;
-import static com.google.javascript.jscomp.Es6RewriteClass.CONFLICTING_GETTER_SETTER_TYPE;
 import static com.google.javascript.jscomp.Es6RewriteClass.DYNAMIC_EXTENDS_TYPE;
 import static com.google.javascript.jscomp.Es6ToEs3Util.CANNOT_CONVERT;
 import static com.google.javascript.jscomp.Es6ToEs3Util.CANNOT_CONVERT_YET;
@@ -25,7 +23,7 @@ import static com.google.javascript.jscomp.TypeCheck.INSTANTIATE_ABSTRACT_CLASS;
 import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES7_MODULES;
 
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
-import com.google.javascript.jscomp.parsing.parser.FeatureSet;
+import com.google.javascript.jscomp.testing.NoninjectingCompiler;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -100,23 +98,16 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     super.setUp();
     setAcceptedLanguage(LanguageMode.ECMASCRIPT_2016);
     setLanguageOut(LanguageMode.ECMASCRIPT3);
-    enableRunTypeCheckAfterProcessing();
     disableTypeCheck();
   }
 
   protected final PassFactory makePassFactory(
       String name, final CompilerPass pass) {
-    return new PassFactory(name, true/* one-time pass */) {
-      @Override
-      protected CompilerPass create(AbstractCompiler compiler) {
-        return pass;
-      }
-
-      @Override
-      protected FeatureSet featureSet() {
-        return ES7_MODULES;
-      }
-    };
+    return PassFactory.builder()
+        .setName(name)
+        .setInternalFactory((compiler) -> pass)
+        .setFeatureSet(ES7_MODULES)
+        .build();
   }
 
   @Override
@@ -126,16 +117,16 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     PhaseOptimizer optimizer = new PhaseOptimizer(compiler, null);
     optimizer.addOneTimePass(
         makePassFactory(
+            "es6InjectRuntimeLibraries", new InjectTranspilationRuntimeLibraries(compiler)));
+    optimizer.addOneTimePass(
+        makePassFactory(
             "Es6RenameVariablesInParamLists", new Es6RenameVariablesInParamLists(compiler)));
     optimizer.addOneTimePass(
         makePassFactory("es6ConvertSuper", new Es6ConvertSuper(compiler)));
+    optimizer.addOneTimePass(
+        makePassFactory("rewriteNewDotTarget", new RewriteNewDotTarget(compiler)));
     optimizer.addOneTimePass(makePassFactory("es6ExtractClasses", new Es6ExtractClasses(compiler)));
     optimizer.addOneTimePass(makePassFactory("es6RewriteClass", new Es6RewriteClass(compiler)));
-    optimizer.addOneTimePass(
-        makePassFactory("es6InjectRuntimeLibraries", new Es6InjectRuntimeLibraries(compiler)));
-    // Automatically generated constructor calls will contain a call to super() using spread.
-    // super(...arguments);
-    // We depend on that getting rewritten before we do the super constructor call rewriting.
     optimizer.addOneTimePass(
         makePassFactory("es6RewriteRestAndSpread", new Es6RewriteRestAndSpread(compiler)));
     optimizer.addOneTimePass(
@@ -144,27 +135,19 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     optimizer.addOneTimePass(
         makePassFactory(
             "Es6RewriteBlockScopedDeclaration", new Es6RewriteBlockScopedDeclaration(compiler)));
-    optimizer.addOneTimePass(
-        makePassFactory(
-            "Es6ConvertSuperConstructorCalls", new Es6ConvertSuperConstructorCalls(compiler)));
     return optimizer;
-  }
-
-  @Override
-  protected int getNumRepetitions() {
-    return 1;
   }
 
   @Test
   public void testObjectLiteralStringKeysWithNoValue() {
     test("var x = {a, b};", "var x = {a: a, b: b};");
-    assertThat(getLastCompiler().injected).isEmpty();
+    assertThat(getLastCompiler().getInjected()).isEmpty();
   }
 
   @Test
   public void testSpreadLibInjection() {
     test("var x = [...a];", "var x=[].concat($jscomp.arrayFromIterable(a))");
-    assertThat(getLastCompiler().injected).containsExactly("es6/util/arrayfromiterable");
+    assertThat(getLastCompiler().getInjected()).containsExactly("es6/util/arrayfromiterable");
   }
 
   @Test
@@ -172,36 +155,31 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "var x = {/** @return {number} */ a() { return 0; } };",
         "var x = {/** @return {number} */ a: function() { return 0; } };");
-    assertThat(getLastCompiler().injected).isEmpty();
+    assertThat(getLastCompiler().getInjected()).isEmpty();
   }
 
   @Test
   public void testClassStatement() {
-    test("class C { }", "/** @constructor @struct */ var C = function() {};");
-    test(
-        "class C { constructor() {} }",
-        "/** @constructor @struct */ var C = function() {};");
+    test("class C { }", "/** @constructor */ var C = function() {};");
+    test("class C { constructor() {} }", "/** @constructor */ var C = function() {};");
     test(
         "class C { method() {}; }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
             "C.prototype.method = function() {};"));
     test(
         "class C { constructor(a) { this.a = a; } }",
-        "/** @constructor @struct */ var C = function(a) { this.a = a; };");
+        "/** @constructor */ var C = function(a) { this.a = a; };");
 
     test(
         "class C { constructor() {} foo() {} }",
-        lines(
-            "/** @constructor @struct */",
-            "var C = function() {};",
-            "C.prototype.foo = function() {};"));
+        lines("/** @constructor */", "var C = function() {};", "C.prototype.foo = function() {};"));
 
     test(
         "class C { constructor() {}; foo() {}; bar() {} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
             "C.prototype.foo = function() {};",
             "C.prototype.bar = function() {};"));
@@ -209,7 +187,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class C { foo() {}; bar() {} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
             "C.prototype.foo = function() {};",
             "C.prototype.bar = function() {};"));
@@ -224,37 +202,26 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  bar() { alert(this.a); }",
             "}"),
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function(a) { this.a = a; };",
             "C.prototype.foo = function() { console.log(this.a); };",
             "C.prototype.bar = function() { alert(this.a); };"));
 
     test(
         lines(
-            "if (true) {",
+            "if (true) {", //
             "   class Foo{}",
             "} else {",
             "   class Foo{}",
             "}"),
         lines(
             "if (true) {",
-            "    /** @constructor @struct */",
+            "    /** @constructor */",
             "    var Foo = function() {};",
             "} else {",
-            "    /** @constructor @struct */",
+            "    /** @constructor */",
             "    var Foo$0 = function() {};",
             "}"));
-  }
-
-  @Test
-  public void testClassWithNgInject() {
-    test(
-        "class A { /** @ngInject */ constructor($scope) {} }",
-        "/** @constructor @struct @ngInject */ var A = function($scope) {}");
-
-    test(
-        "/** @ngInject */ class A { constructor($scope) {} }",
-        "/** @constructor @struct @ngInject */ var A = function($scope) {}");
   }
 
   @Test
@@ -262,11 +229,10 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "f(class extends D { f() { super.g() } })",
         lines(
-            "/** @constructor @struct @const",
+            "/** @constructor @const",
             " * @extends {D}",
-            " * @param {...?} var_args",
             " */",
-            "var testcode$classdecl$var0 = function(var_args) {",
+            "var testcode$classdecl$var0 = function() {",
             "  return D.apply(this,arguments) || this; ",
             "};",
             "$jscomp.inherits(testcode$classdecl$var0, D);",
@@ -282,27 +248,21 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
 
   @Test
   public void testClassWithJsDoc() {
-    test("class C { }", "/** @constructor @struct */ var C = function() { };");
+    test("class C { }", "/** @constructor */ var C = function() { };");
 
     test(
-        "/** @deprecated */ class C { }",
-        "/** @constructor @struct @deprecated */ var C = function() {};");
+        "/** @deprecated */ class C { }", "/** @constructor @deprecated */ var C = function() {};");
 
     test(
         "/** @dict */ class C { }",
         "/** @constructor @dict */ var C = function() {};");
 
     test(
-        "/** @template T */ class C { }",
-        "/** @constructor @struct @template T */ var C = function() {};");
+        "/** @template T */ class C { }", "/** @constructor @template T */ var C = function() {};");
 
-    test(
-        "/** @final */ class C { }",
-        "/** @constructor @struct @final */ var C = function() {};");
+    test("/** @final */ class C { }", "/** @constructor @final */ var C = function() {};");
 
-    test(
-        "/** @private */ class C { }",
-        "/** @constructor @struct @private */ var C = function() {};");
+    test("/** @private */ class C { }", "/** @constructor @private */ var C = function() {};");
   }
 
   @Test
@@ -323,7 +283,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
         lines(
             "/**",
             " * Converts Xs to Ys.",
-            " * @struct @interface",
+            " * @interface",
             " */",
             "var Converter = function() { };",
             "",
@@ -350,7 +310,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "}"),
         lines(
             "/**",
-            " * @struct @record",
+            " * @record",
             " */",
             "var Converter = function() { };",
             "",
@@ -362,86 +322,12 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
   }
 
   @Test
-  public void testCtorWithJsDoc() {
-    test(
-        "class C { /** @param {boolean} b */ constructor(b) {} }",
-        lines(
-            "/**",
-            " * @param {boolean} b",
-            " * @constructor",
-            " * @struct",
-            " */",
-            "var C = function(b) {};"));
-
-    test(
-        "class C { /** @throws {Error} */ constructor() {} }",
-        lines(
-            "/**",
-            " * @throws {Error}",
-            " * @constructor",
-            " * @struct",
-            " */",
-            "var C = function() {};"));
-
-    test(
-        "class C { /** @private */ constructor() {} }",
-        lines(
-            "/**",
-            " * @private",
-            " * @constructor",
-            " * @struct",
-            " */",
-            "var C = function() {};"));
-
-    test(
-        "class C { /** @deprecated */ constructor() {} }",
-        lines(
-            "/**",
-            " * @deprecated",
-            " * @constructor",
-            " * @struct",
-            " */",
-            "var C = function() {};"));
-
-    test(
-        "class C { /** @template T */ constructor() {} }",
-        lines(
-            "/**",
-            " * @constructor",
-            " * @struct",
-            " * @template T",
-            " */",
-            "var C = function() {};"));
-
-    test(
-        "/** @template S */ class C { /** @template T */ constructor() {} }",
-        lines(
-            "/**",
-            " * @constructor",
-            " * @struct",
-            " * @template S, T",
-            " */",
-            "var C = function() {};"));
-
-    test(
-        "/** @template S */ class C { /** @template T, U */ constructor() {} }",
-        lines(
-            "/**",
-            " * @constructor",
-            " * @struct",
-            " * @template S, T, U",
-            " */",
-            "var C = function() {};"));
-  }
-
-  @Test
   public void testMemberWithJsDoc() {
     test(
         "class C { /** @param {boolean} b */ foo(b) {} }",
         lines(
             "/**",
             " * @constructor",
-            " * @struct",
             " */",
             "var C = function() {};",
             "",
@@ -451,33 +337,24 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
 
   @Test
   public void testClassStatementInsideIf() {
-    test(
-        "if (foo) { class C { } }",
-        "if (foo) { /** @constructor @struct */ var C = function() {}; }");
+    test("if (foo) { class C { } }", "if (foo) { /** @constructor */ var C = function() {}; }");
 
-    test(
-        "if (foo) class C {}",
-        "if (foo) { /** @constructor @struct */ var C = function() {}; }");
-
+    test("if (foo) class C {}", "if (foo) { /** @constructor */ var C = function() {}; }");
   }
 
   /** Class expressions that are the RHS of a 'var' statement. */
   @Test
   public void testClassExpressionInVar() {
-    test("var C = class { }",
-        "/** @constructor @struct */ var C = function() {}");
+    test("var C = class { }", "/** @constructor */ var C = function() {}");
 
     test(
         "var C = class { foo() {} }",
-        lines(
-            "/** @constructor @struct */ var C = function() {}",
-            "",
-            "C.prototype.foo = function() {}"));
+        lines("/** @constructor */ var C = function() {}", "", "C.prototype.foo = function() {}"));
 
     test(
         "var C = class C { }",
         lines(
-            "/** @constructor @struct @const */",
+            "/** @constructor @const */",
             "var testcode$classdecl$var0 = function() {};",
             "/** @constructor */",
             "var C = testcode$classdecl$var0;"));
@@ -485,7 +362,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "var C = class C { foo() {} }",
         lines(
-            "/** @constructor @struct @const */",
+            "/** @constructor @const */",
             "var testcode$classdecl$var0 = function() {}",
             "testcode$classdecl$var0.prototype.foo = function() {};",
             "",
@@ -496,13 +373,12 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
   /** Class expressions that are the RHS of an assignment. */
   @Test
   public void testClassExpressionInAssignment() {
-    test("goog.example.C = class { }",
-        "/** @constructor @struct */ goog.example.C = function() {}");
+    test("goog.example.C = class { }", "/** @constructor */ goog.example.C = function() {}");
 
     test(
         "goog.example.C = class { foo() {} }",
         lines(
-            "/** @constructor @struct */ goog.example.C = function() {}",
+            "/** @constructor */ goog.example.C = function() {}",
             "goog.example.C.prototype.foo = function() {};"));
   }
 
@@ -511,7 +387,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "window['MediaSource'] = class {};",
         lines(
-            "/** @constructor @struct @const */",
+            "/** @constructor @const */",
             "var testcode$classdecl$var0 = function() {};",
             "window['MediaSource'] = testcode$classdecl$var0;"));
   }
@@ -521,13 +397,13 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "var C = new (class {})();",
         lines(
-            "/** @constructor @struct @const */",
+            "/** @constructor @const */",
             "var testcode$classdecl$var0=function(){};",
             "var C=new testcode$classdecl$var0"));
     test(
         "(condition ? obj1 : obj2).prop = class C { };",
         lines(
-            "/** @constructor @struct @const */",
+            "/** @constructor @const */",
             "var testcode$classdecl$var0 = function(){};",
             "(condition ? obj1 : obj2).prop = testcode$classdecl$var0;"));
   }
@@ -538,7 +414,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
 
     test(
         "/** @abstract */ class Foo {} var x = new Foo();",
-        "/** @abstract @constructor @struct */ var Foo = function() {}; var x = new Foo();",
+        "/** @abstract @constructor */ var Foo = function() {}; var x = new Foo();",
         warning(INSTANTIATE_ABSTRACT_CLASS));
   }
 
@@ -550,7 +426,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "var JSCompiler_temp$jscomp$0;",
             "if (JSCompiler_temp$jscomp$0 = foo) {",
             "} else {",
-            "  /** @const @struct @constructor */ var testcode$classdecl$var0 = function(){};",
+            "  /** @const @constructor */ var testcode$classdecl$var0 = function(){};",
             "  JSCompiler_temp$jscomp$0 = foo = testcode$classdecl$var0;",
             "}",
             "var C = new JSCompiler_temp$jscomp$0;"));
@@ -561,23 +437,22 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class D {} class C extends D {}",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
-            "/** @constructor @struct",
+            "/** @constructor",
             " * @extends {D}",
-            " * @param {...?} var_args",
             " */",
-            "var C = function(var_args) { D.apply(this, arguments); };",
+            "var C = function() { D.apply(this, arguments); };",
             "$jscomp.inherits(C, D);"));
-    assertThat(getLastCompiler().injected)
-        .containsExactly("es6/util/inherits", "es6/util/arrayfromiterable");
+    assertThat(getLastCompiler().getInjected())
+        .containsExactly("es6/util/inherits", "es6/util/construct", "es6/util/arrayfromiterable");
 
     test(
         "class D {} class C extends D { constructor() { super(); } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
-            "/** @constructor @struct @extends {D} */",
+            "/** @constructor @extends {D} */",
             "var C = function() {",
             "  D.call(this);",
             "}",
@@ -586,9 +461,9 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class D {} class C extends D { constructor(str) { super(str); } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
-            "/** @constructor @struct @extends {D} */",
+            "/** @constructor @extends {D} */",
             "var C = function(str) { ",
             "  D.call(this, str);",
             "}",
@@ -597,26 +472,25 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class C extends ns.D { }",
         lines(
-            "/** @constructor @struct",
+            "/** @constructor",
             " * @extends {ns.D}",
-            " * @param {...?} var_args",
             " */",
-            "var C = function(var_args) {",
+            "var C = function() {",
             " return ns.D.apply(this, arguments) || this;",
             "};",
             "$jscomp.inherits(C, ns.D);"));
 
     // Don't inject $jscomp.inherits() or apply() for externs
     testExternChanges(
-        "class D {} class C extends D {}", "",
+        "class D {} class C extends D {}",
+        "",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
-            "/** @constructor @struct",
+            "/** @constructor",
             " * @extends {D}",
-            " * @param {...?} var_args",
             " */",
-            "var C = function(var_args) {};"));
+            "var C = function() {};"));
   }
 
   @Test
@@ -631,17 +505,15 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "}",
             "class C extends Error {}"), // autogenerated constructor
         lines(
-            "/** @constructor @struct",
-            " * @param {string} msg",
+            "/** @constructor",
             " */",
             "var Error = function(msg) {",
             "  /** @const */ this.message = msg;",
             "};",
-            "/** @constructor @struct",
+            "/** @constructor",
             " * @extends {Error}",
-            " * @param {...?} var_args",
             " */",
-            "var C = function(var_args) { Error.apply(this, arguments); };",
+            "var C = function() { Error.apply(this, arguments); };",
             "$jscomp.inherits(C, Error);"));
     test(
         lines(
@@ -658,13 +530,12 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  }",
             "}"),
         lines(
-            "/** @constructor @struct",
-            " * @param {string} msg",
+            "/** @constructor",
             " */",
             "var Error = function(msg) {",
             "  /** @const */ this.message = msg;",
             "};",
-            "/** @constructor @struct",
+            "/** @constructor",
             " * @extends {Error}",
             " */",
             "var C = function() { Error.call(this, 'C error'); };",
@@ -676,11 +547,10 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class C extends Error {}", // autogenerated constructor
         lines(
-            "/** @constructor @struct",
+            "/** @constructor",
             " * @extends {Error}",
-            " * @param {...?} var_args",
             " */",
-            "var C = function(var_args) {",
+            "var C = function() {",
             "  var $jscomp$tmp$error;",
             "  $jscomp$tmp$error = Error.apply(this, arguments),",
             "      this.message = $jscomp$tmp$error.message,",
@@ -697,7 +567,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  }",
             "}"),
         lines(
-            "/** @constructor @struct",
+            "/** @constructor",
             " * @extends {Error}",
             " */",
             "var C = function() {",
@@ -732,14 +602,13 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  g() {}",
             "}"),
         lines(
-            "/** @struct @interface */",
+            "/** @interface */",
             "var D = function() {};",
             "D.prototype.f = function() {};",
             "/**",
-            " * @struct @interface",
-            " * @param {...?} var_args",
+            " * @interface",
             " * @extends{D} */",
-            "var C = function(var_args) {};",
+            "var C = function() {};",
             "$jscomp.inherits(C, D);",
             "C.prototype.g = function() {};"));
   }
@@ -757,14 +626,13 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  g() {}",
             "}"),
         lines(
-            "/** @struct @record */",
+            "/** @record */",
             "var D = function() {};",
             "D.prototype.f = function() {};",
             "/**",
-            " * @struct @record",
-            " * @param {...?} var_args",
+            " * @record",
             " * @extends{D} */",
-            "var C = function(var_args) {};",
+            "var C = function() {};",
             "$jscomp.inherits(C, D);",
             "C.prototype.g = function() {};"));
   }
@@ -782,10 +650,10 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  f() {console.log('hi');}",
             "}"),
         lines(
-            "/** @struct @interface */",
+            "/** @interface */",
             "var D = function() {};",
             "D.prototype.f = function() {};",
-            "/** @constructor @struct @implements{D} */",
+            "/** @constructor @implements{D} */",
             "var C = function() {};",
             "C.prototype.f = function() {console.log('hi');};"));
   }
@@ -794,18 +662,12 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
   public void testSuperCallInExterns() {
     // Drop super() calls in externs.
     testExternChanges(
-        lines(
-            "class D {}",
-            "class C extends D {",
-            "  constructor() {",
-            "    super();",
-            "  }",
-            "}"),
+        lines("class D {}", "class C extends D {", "  constructor() {", "    super();", "  }", "}"),
         "",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
-            "/** @constructor @struct",
+            "/** @constructor",
             " * @extends {D}",
             " */",
             "var C = function() {};"));
@@ -816,9 +678,9 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class D {} class C extends D { constructor() { super(); } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
-            "/** @constructor @struct @extends {D} */",
+            "/** @constructor @extends {D} */",
             "var C = function() {",
             "  D.call(this);",
             "}",
@@ -827,9 +689,9 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class D {} class C extends D { constructor(str) { super(str); } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {}",
-            "/** @constructor @struct @extends {D} */",
+            "/** @constructor @extends {D} */",
             "var C = function(str) {",
             "  D.call(this,str);",
             "}",
@@ -838,9 +700,9 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class D {} class C extends D { constructor(str, n) { super(str); this.n = n; } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {}",
-            "/** @constructor @struct @extends {D} */",
+            "/** @constructor @extends {D} */",
             "var C = function(str, n) {",
             "  D.call(this,str);",
             "  this.n = n;",
@@ -855,9 +717,9 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  foo() { return super.foo(); }",
             "}"),
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {}",
-            "/** @constructor @struct @extends {D} */",
+            "/** @constructor @extends {D} */",
             "var C = function() { }",
             "$jscomp.inherits(C, D);",
             "C.prototype.foo = function() {",
@@ -872,9 +734,9 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  foo(bar) { return super.foo(bar); }",
             "}"),
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {}",
-            "/** @constructor @struct @extends {D} */",
+            "/** @constructor @extends {D} */",
             "var C = function() {};",
             "$jscomp.inherits(C, D);",
             "C.prototype.foo = function(bar) {",
@@ -884,10 +746,10 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class C { method() { class D extends C { constructor() { super(); }}}}",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {}",
             "C.prototype.method = function() {",
-            "  /** @constructor @struct @extends{C} */",
+            "  /** @constructor @extends{C} */",
             "  var D = function() {",
             "    C.call(this);",
             "  }",
@@ -920,17 +782,14 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "}"),
         lines(
             "/**",
-            " * @constructor @struct",
-            " * @param {string} str",
+            " * @constructor",
             " */",
             "var D = function(str) {",
             "  this.str = str;",
             "  return;",
             "}",
             "/**",
-            " * @constructor @struct @extends {D}",
-            " * @param {string} str",
-            " * @param {number} n",
+            " * @constructor @extends {D}",
             " */",
             "var C = function(str, n) {",
             "  (D.call(this,str), this).n = n;", // super() returns `this`.
@@ -953,7 +812,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  }",
             "}"),
         lines(
-            "/** @constructor @struct @extends {D} */",
+            "/** @constructor @extends {D} */",
             "var C = function(str, n) {",
             "  var $jscomp$super$this;",
             "  ($jscomp$super$this = D.call(this,str) || this).n = n;",
@@ -986,14 +845,11 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  }",
             "}"),
         lines(
-            "/** @constructor @struct",
-            " * @param {string} name */",
+            "/** @constructor */",
             "var D = function(name) {",
             "  this.name = name;",
             "}",
-            "/** @constructor @struct @extends {D}",
-            " * @param {string} str",
-            " * @param {number} n */",
+            "/** @constructor @extends {D} */",
             "var C = function(str, n) {",
             "  if (n >= 0) {",
             "    D.call(this, 'positive: ' + str);",
@@ -1020,9 +876,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  }",
             "}"),
         lines(
-            "/** @constructor @struct @extends {D}",
-            " * @param {string} str",
-            " * @param {number} n */",
+            "/** @constructor @extends {D} */",
             "var C = function(str, n) {",
             "  var $jscomp$super$this;",
             "  if (n >= 0) {",
@@ -1050,11 +904,11 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  }",
             "}"),
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var Foo = function() {};",
             "Foo.prototype['m'] = function() { return 1; };",
-            "/** @constructor @struct @extends {Foo} @param {...?} var_args */",
-            "var Bar = function(var_args) { Foo.apply(this, arguments); };",
+            "/** @constructor @extends {Foo} */",
+            "var Bar = function() { Foo.apply(this, arguments); };",
             "$jscomp.inherits(Bar, Foo);",
             "Bar.prototype['m'] = function () { return Foo.prototype['m'].call(this) + 1; };"));
   }
@@ -1081,21 +935,18 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  }",
             "}"),
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var Base = function() {};",
             "Base.prototype.method = function() { return 5; };",
             "",
-            "/** @constructor @struct @extends {Base} */",
+            "/** @constructor @extends {Base} */",
             "var Subclass = function() { Base.call(this); };",
             "",
-            "/** @type {?} */",
-            "Subclass.prototype.x;",
             "$jscomp.inherits(Subclass, Base);",
             "$jscomp.global.Object.defineProperties(Subclass.prototype, {",
             "  x: {",
             "    configurable:true,",
             "    enumerable:true,",
-            "    /** @this {Subclass} */",
             "    get: function() { return Base.prototype.method.call(this); },",
             "  }",
             "});"));
@@ -1123,44 +974,62 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  }",
             "}"),
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var Base = function() {};",
             "Base.prototype.method = function() { this._x = 5; };",
             "",
-            "/** @constructor @struct @extends {Base} */",
+            "/** @constructor @extends {Base} */",
             "var Subclass = function() { Base.call(this); };",
             "",
-            "/** @type {?} */",
-            "Subclass.prototype.x;",
             "$jscomp.inherits(Subclass, Base);",
             "$jscomp.global.Object.defineProperties(Subclass.prototype, {",
             "  x: {",
             "    configurable:true,",
             "    enumerable:true,",
-            "    /** @this {Subclass} */",
             "    set: function(value) { Base.prototype.method.call(this); },",
             "  }",
             "});"));
   }
 
   @Test
-  public void testExtendFunction() {
-    // Function and other native classes cannot be correctly extended in transpiled form.
-    // Test both explicit and automatically generated constructors.
-    testError(
+  public void testExtendNativeClass() {
+    test(
         lines(
-            "class FooFunction extends Function {",
+            "class FooPromise extends Promise {",
             "  /** @param {string} msg */",
-            "  constructor(msg) {",
-            "    super();",
+            // explicit constructor
+            "  constructor(callback, msg) {",
+            "    super(callback);",
             "    this.msg = msg;",
             "  }",
             "}"),
-        CANNOT_CONVERT);
+        lines(
+            "/**",
+            " * @constructor",
+            " * @extends {Promise}",
+            " */",
+            "var FooPromise = function(callback, msg) {",
+            "  var $jscomp$super$this;",
+            "  $jscomp$super$this = $jscomp.construct(Promise, [callback], this.constructor)",
+            "  $jscomp$super$this.msg = msg;",
+            "  return $jscomp$super$this;",
+            "}",
+            "$jscomp.inherits(FooPromise, Promise);",
+            ""));
 
-    testError(
-        "class FooFunction extends Function {}",
-        CANNOT_CONVERT);
+    test(
+        // automatically generated constructor
+        "class FooPromise extends Promise {}",
+        lines(
+            "/**",
+            " * @constructor",
+            " * @extends {Promise}",
+            " */",
+            "var FooPromise = function() {",
+            "  return $jscomp.construct(Promise, arguments, this.constructor)",
+            "}",
+            "$jscomp.inherits(FooPromise, Promise);",
+            ""));
   }
 
   @Test
@@ -1179,8 +1048,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "}"),
         lines(
             "/**",
-            " * @constructor @struct @extends {Object}",
-            " * @param {string} msg",
+            " * @constructor @extends {Object}",
             " */",
             "var Foo = function(msg) {",
             "  this;", // super() replaced with its return value
@@ -1191,10 +1059,9 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
         "class Foo extends Object {}",
         lines(
             "/**",
-            " * @constructor @struct @extends {Object}",
-            " * @param {...?} var_args",
+            " * @constructor @extends {Object}",
             " */",
-            "var Foo = function(var_args) {",
+            "var Foo = function() {",
             "  this;", // super.apply(this, arguments) replaced with its return value
             "};",
             "$jscomp.inherits(Foo, Object);"));
@@ -1224,13 +1091,12 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
         expected(
             lines(
                 "/**",
-                " * @constructor @struct",
+                " * @constructor",
                 " */",
                 "var Object = function() {",
                 "};",
                 "/**",
-                " * @constructor @struct @extends {Object}",
-                " * @param {string} msg",
+                " * @constructor @extends {Object}",
                 " */",
                 "var Foo = function(msg) {",
                 "  Object.call(this);",
@@ -1241,20 +1107,19 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
         externs(""),
         srcs(
             lines(
-                "class Object {}",
+                "class Object {}", //
                 "class Foo extends Object {}")), // autogenerated constructor
         expected(
             lines(
                 "/**",
-                " * @constructor @struct",
+                " * @constructor",
                 " */",
                 "var Object = function() {",
                 "};",
                 "/**",
-                " * @constructor @struct @extends {Object}",
-                " * @param {...?} var_args",
+                " * @constructor @extends {Object}",
                 " */",
-                "var Foo = function(var_args) {",
+                "var Foo = function() {",
                 "  Object.apply(this, arguments);", // all arguments passed on to super()
                 "};",
                 "$jscomp.inherits(Foo, Object);")));
@@ -1265,7 +1130,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "var F = class G {}",
         lines(
-            "/** @constructor @struct @const */",
+            "/** @constructor @const */",
             "var testcode$classdecl$var0 = function(){};",
             "/** @constructor */",
             "var F = testcode$classdecl$var0;"));
@@ -1273,7 +1138,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "F = class G {}",
         lines(
-            "/** @constructor @struct @const */",
+            "/** @constructor @const */",
             "var testcode$classdecl$var0 = function(){};",
             "/** @constructor */",
             "F = testcode$classdecl$var0;"));
@@ -1284,24 +1149,23 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class C { f() { class D {} } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
             "C.prototype.f = function() {",
-            "  /** @constructor @struct */",
+            "  /** @constructor */",
             "  var D = function() {}",
             "};"));
 
     test(
         "class C { f() { class D extends C {} } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
             "C.prototype.f = function() {",
             "  /**",
-            " * @constructor @struct",
-            " * @param {...?} var_args",
+            " * @constructor",
             " * @extends{C} */",
-            "  var D = function(var_args) {",
+            "  var D = function() {",
             "    C.apply(this, arguments); ",
             "  };",
             "  $jscomp.inherits(D, C);",
@@ -1313,14 +1177,13 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class D { d() {} } class C extends D { f() {var i = super.d;} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
             "D.prototype.d = function() {};",
             "/**",
-            " * @constructor @struct",
-            " * @param {...?} var_args",
+            " * @constructor",
             " * @extends{D} */",
-            "var C = function(var_args) {",
+            "var C = function() {",
             "  D.apply(this, arguments); ",
             "};",
             "$jscomp.inherits(C, D);",
@@ -1331,14 +1194,13 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class D { ['d']() {} } class C extends D { f() {var i = super['d'];} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
             "D.prototype['d'] = function() {};",
             "/**",
-            " * @constructor @struct",
-            " * @param {...?} var_args",
+            " * @constructor",
             " * @extends{D} */",
-            "var C = function(var_args) {",
+            "var C = function() {",
             "  D.apply(this, arguments); ",
             "};",
             "$jscomp.inherits(C, D);",
@@ -1349,14 +1211,13 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class D { d() {}} class C extends D { static f() {var i = super.d;} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
             "D.prototype.d = function() {};",
             "/**",
-            " * @constructor @struct",
-            " * @param {...?} var_args",
+            " * @constructor",
             " * @extends{D} */",
-            "var C = function(var_args) {",
+            "var C = function() {",
             "  D.apply(this, arguments); ",
             "};",
             "$jscomp.inherits(C, D);",
@@ -1367,14 +1228,13 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class D { ['d']() {}} class C extends D { static f() {var i = super['d'];} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
             "D.prototype['d'] = function() {};",
             "/**",
-            " * @constructor @struct",
-            " * @param {...?} var_args",
+            " * @constructor",
             " * @extends{D} */",
-            "var C = function(var_args) {",
+            "var C = function() {",
             "  D.apply(this, arguments); ",
             "};",
             "$jscomp.inherits(C, D);",
@@ -1385,13 +1245,12 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class D {} class C extends D { f() {return super.s;} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
             "/**",
-            " * @constructor @struct",
-            " * @param {...?} var_args",
+            " * @constructor",
             " * @extends{D} */",
-            "var C = function(var_args) {",
+            "var C = function() {",
             "  D.apply(this, arguments); ",
             "};",
             "$jscomp.inherits(C, D);",
@@ -1402,13 +1261,12 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class D {} class C extends D { f() { m(super.s);} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
             "/**",
-            " * @constructor @struct",
-            " * @param {...?} var_args",
+            " * @constructor",
             " * @extends{D} */",
-            "var C = function(var_args) {",
+            "var C = function() {",
             "  D.apply(this, arguments); ",
             "};",
             "$jscomp.inherits(C, D);",
@@ -1419,13 +1277,12 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class D {} class C extends D { foo() { return super.m.foo();} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
             "/**",
-            " * @constructor @struct",
-            " * @param {...?} var_args",
+            " * @constructor",
             " * @extends{D} */",
-            "var C = function(var_args) {",
+            "var C = function() {",
             "  D.apply(this, arguments); ",
             "};",
             "$jscomp.inherits(C, D);",
@@ -1436,13 +1293,12 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class D {} class C extends D { static foo() { return super.m.foo();} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
             "/**",
-            " * @constructor @struct",
-            " * @param {...?} var_args",
+            " * @constructor",
             " * @extends{D} */",
-            "var C = function(var_args) {",
+            "var C = function() {",
             "  D.apply(this, arguments); ",
             "};",
             "$jscomp.inherits(C, D);",
@@ -1465,32 +1321,25 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  get g() { return super.g + '-sub'; }",
             "}"),
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var Base = function() {};",
-            "/** @type {?} */",
-            "Base.prototype.g;",
             "$jscomp.global.Object.defineProperties(",
             "    Base.prototype,",
             "    {",
             "        g:{",
             "            configurable:true,",
             "            enumerable:true,",
-            "            /** @this {Base} */",
             "            get:function(){return\"base\"},",
-            "            /** @this {Base} */",
             "            set:function(v){alert(\"base.prototype.g = \" + v);}",
             "        }",
             "    });",
             "/**",
-            " * @constructor @struct",
+            " * @constructor",
             " * @extends {Base}",
-            " * @param {...?} var_args",
             " */",
-            "var Sub = function(var_args) {",
+            "var Sub = function() {",
             "  Base.apply(this, arguments);",
             "};",
-            "/** @type {?} */",
-            "Sub.prototype.g;",
             "$jscomp.inherits(Sub, Base);",
             "$jscomp.global.Object.defineProperties(",
             "    Sub.prototype,",
@@ -1498,7 +1347,6 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "        g:{",
             "            configurable:true,",
             "            enumerable:true,",
-            "            /** @this {Sub} */",
             "            get:function(){return Base.prototype.g + \"-sub\";},",
             "        }",
             "    });",
@@ -1522,27 +1370,30 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class F { static f() { return this; } }",
         lines(
-            "/** @constructor @struct */ var F = function() {}",
+            "/** @constructor */ var F = function() {}",
             "/** @this {?} */ F.f = function() { return this; };"));
   }
 
   @Test
   public void testStaticMethods() {
-    test("class C { static foo() {} }",
-        "/** @constructor @struct */ var C = function() {}; C.foo = function() {};");
+    test(
+        "class C { static foo() {} }",
+        "/** @constructor */ var C = function() {}; C.foo = function() {};");
 
-    test("class C { static foo() {}; foo() {} }",
+    test(
+        "class C { static foo() {}; foo() {} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
             "",
             "C.foo = function() {};",
             "",
             "C.prototype.foo = function() {};"));
 
-    test("class C { static foo() {}; bar() { C.foo(); } }",
+    test(
+        "class C { static foo() {}; bar() { C.foo(); } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
             "",
             "C.foo = function() {};",
@@ -1561,10 +1412,10 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "class C extends D { constructor() {} }",
             "C.f();"),
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
             "D.f = function () {};",
-            "/** @constructor @struct @extends{D} */",
+            "/** @constructor @extends{D} */",
             "var C = function() {};",
             "$jscomp.inherits(C, D);",
             "C.f();"));
@@ -1580,10 +1431,10 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "}",
             "C.f();"),
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
             "D.f = function() {};",
-            "/** @constructor @struct @extends{D} */",
+            "/** @constructor @extends{D} */",
             "var C = function() { };",
             "$jscomp.inherits(C, D);",
             "C.prototype.f = function() {};",
@@ -1600,10 +1451,10 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  g() {}",
             "}"),
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var D = function() {};",
             "D.f = function() {};",
-            "/** @constructor @struct @extends{D} */",
+            "/** @constructor @extends{D} */",
             "var C = function() { };",
             "$jscomp.inherits(C, D);",
             "C.f = function() {};",
@@ -1620,20 +1471,13 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
         srcs("class CodeClass extends ExternsClass {}"),
         expected(
             lines(
-                "/** @constructor @struct",
+                "/** @constructor",
                 " * @extends {ExternsClass}",
-                " * @param {...?} var_args",
                 " */",
-                "var CodeClass = function(var_args) {",
+                "var CodeClass = function() {",
                 "  return ExternsClass.apply(this,arguments) || this;",
                 "};",
                 "$jscomp.inherits(CodeClass,ExternsClass)")));
-  }
-
-  @Test
-  public void testMockingInFunction() {
-    // Classes cannot be reassigned in function scope.
-    testError("function f() { class C {} C = function() {};}", CLASS_REASSIGNMENT);
   }
 
   // Make sure we don't crash on this code.
@@ -1644,7 +1488,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
         "function f() { var a = b = class {};}",
         lines(
             "function f() {",
-            "  /** @constructor @struct @const */",
+            "  /** @constructor @const */",
             "  var testcode$classdecl$var0 = function() {};",
             "  var a = b = testcode$classdecl$var0;",
             "}"));
@@ -1654,7 +1498,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
         lines(
             "var ns = {};",
             "function f() {",
-            "  /** @constructor @struct @const */",
+            "  /** @constructor @const */",
             "  var testcode$classdecl$var0 = function() {};",
             "  var self = ns.Child = testcode$classdecl$var0",
             "}"));
@@ -1666,33 +1510,40 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
 
     test(
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "function Foo() {}",
             "Foo.prototype.f = function() {};",
             "class Sub extends Foo {}",
             "(new Sub).f();"),
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "function Foo() {}",
             "Foo.prototype.f = function() {};",
             "/**",
-            " * @constructor @struct",
+            " * @constructor",
             " * @extends {Foo}",
-            " * @param {...?} var_args",
             " */",
-            "var Sub=function(var_args) { Foo.apply(this, arguments); }",
+            "var Sub=function() { Foo.apply(this, arguments); }",
             "$jscomp.inherits(Sub, Foo);",
             "(new Sub).f();"));
 
     test(
-        srcs(
-            lines(
-                "/** @constructor @struct */",
-                "function Foo() {}",
-                "Foo.f = function() {};",
-                "class Sub extends Foo {}",
-                "Sub.f();")),
-        warning(TypeCheck.INEXISTENT_PROPERTY));
+        lines(
+            "/** @constructor @struct */",
+            "function Foo() {}",
+            "Foo.f = function() {};",
+            "class Sub extends Foo {}",
+            "Sub.f();"),
+        lines(
+            "/** @constructor @struct */",
+            "function Foo() {}",
+            "Foo.f = function() {};",
+            "/** @constructor",
+            " * @extends {Foo}",
+            " */",
+            "var Sub = function() { Foo.apply(this, arguments); };",
+            "$jscomp.inherits(Sub, Foo);",
+            "Sub.f();"));
 
     test(
         lines(
@@ -1704,11 +1555,10 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "/** @constructor */",
             "function Foo() {}",
             "Foo.f = function() {};",
-            "/** @constructor @struct",
+            "/** @constructor",
             " * @extends {Foo}",
-            " * @param {...?} var_args",
             " */",
-            "var Sub = function(var_args) { Foo.apply(this, arguments); };",
+            "var Sub = function() { Foo.apply(this, arguments); };",
             "$jscomp.inherits(Sub, Foo);"));
   }
 
@@ -1723,15 +1573,12 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class C { get value() { return 0; } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
-            "/** @type {?} */",
-            "C.prototype.value;",
             "$jscomp.global.Object.defineProperties(C.prototype, {",
             "  value: {",
             "    configurable: true,",
             "    enumerable: true,",
-            "    /** @this {C} */",
             "    get: function() {",
             "      return 0;",
             "    }",
@@ -1741,15 +1588,12 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class C { set value(val) { this.internalVal = val; } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
-            "/** @type {?} */",
-            "C.prototype.value;",
             "$jscomp.global.Object.defineProperties(C.prototype, {",
             "  value: {",
             "    configurable: true,",
             "    enumerable: true,",
-            "    /** @this {C} */",
             "    set: function(val) {",
             "      this.internalVal = val;",
             "    }",
@@ -1766,21 +1610,16 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "    return this.internalVal;",
             "  }",
             "}"),
-
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
-            "/** @type {?} */",
-            "C.prototype.value;",
             "$jscomp.global.Object.defineProperties(C.prototype, {",
             "  value: {",
             "    configurable: true,",
             "    enumerable: true,",
-            "    /** @this {C} */",
             "    set: function(val) {",
             "      this.internalVal = val;",
             "    },",
-            "    /** @this {C} */",
             "    get: function() {",
             "      return this.internalVal;",
             "    }",
@@ -1798,19 +1637,13 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "    return 3;",
             "  }",
             "}"),
-
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
-            "/** @type {?} */",
-            "C.prototype.alwaysTwo;",
-            "/** @type {?} */",
-            "C.prototype.alwaysThree;",
             "$jscomp.global.Object.defineProperties(C.prototype, {",
             "  alwaysTwo: {",
             "    configurable: true,",
             "    enumerable: true,",
-            "    /** @this {C} */",
             "    get: function() {",
             "      return 2;",
             "    }",
@@ -1818,13 +1651,11 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  alwaysThree: {",
             "    configurable: true,",
             "    enumerable: true,",
-            "    /** @this {C} */",
             "    get: function() {",
             "      return 3;",
             "    }",
             "  },",
             "});"));
-
   }
 
   @Test
@@ -1833,33 +1664,30 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class C { static get value() {} }  class D extends C { static get value() {} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
-            "/** @nocollapse @type {?} */",
+            "/** @nocollapse */",
             "C.value;",
             "$jscomp.global.Object.defineProperties(C, {",
             "  value: {",
             "    configurable: true,",
             "    enumerable: true,",
-            "    /** @this {C} */",
             "    get: function() {}",
             "  }",
             "});",
-            "/** @constructor @struct",
+            "/** @constructor",
             " * @extends {C}",
-            " * @param {...?} var_args",
             " */",
-            "var D = function(var_args) {",
+            "var D = function() {",
             "  C.apply(this,arguments); ",
             "};",
-            "/** @nocollapse @type {?} */",
+            "/** @nocollapse */",
             "D.value;",
             "$jscomp.inherits(D, C);",
             "$jscomp.global.Object.defineProperties(D, {",
             "  value: {",
             "    configurable: true,",
             "    enumerable: true,",
-            "    /** @this {D} */",
             "    get: function() {}",
             "  }",
             "});"));
@@ -1872,19 +1700,15 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
 
     test(
         "class C { /** @return {number} */ get value() { return 0; } }",
-
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
-            "/** @type {number} */",
-            "C.prototype.value;",
             "$jscomp.global.Object.defineProperties(C.prototype, {",
             "  value: {",
             "    configurable: true,",
             "    enumerable: true,",
             "    /**",
             "     * @return {number}",
-            "     * @this {C}",
             "     */",
             "    get: function() {",
             "      return 0;",
@@ -1895,36 +1719,23 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class C { /** @param {string} v */ set value(v) { } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
-            "/** @type {string} */",
-            "C.prototype.value;",
             "$jscomp.global.Object.defineProperties(C.prototype, {",
             "  value: {",
             "    configurable: true,",
             "    enumerable: true,",
             "    /**",
-            "     * @this {C}",
             "     * @param {string} v",
             "     */",
             "    set: function(v) {}",
             "  }",
             "});"));
-
-    testError(
-        lines(
-            "class C {",
-            "  /** @return {string} */",
-            "  get value() { }",
-            "",
-            "  /** @param {number} v */",
-            "  set value(v) { }",
-            "}"),
-        CONFLICTING_GETTER_SETTER_TYPE);
   }
 
   @Test
   public void testClassEs5GetterSetterIncorrectTypes() {
+    // TODO(b/144721663): these should cause some sort of type warning
     enableTypeCheck();
     setLanguageOut(LanguageMode.ECMASCRIPT5);
 
@@ -1932,10 +1743,8 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class C { /** @type {string} */ get value() { } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
-            "/** @type {?} */",
-            "C.prototype.value;",
             "$jscomp.global.Object.defineProperties(C.prototype, {",
             "  value: {",
             "    configurable: true,",
@@ -1943,17 +1752,14 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "    /** @type {string} */",
             "    get: function() {}",
             "  }",
-            "});"),
-        warning(TypeValidator.TYPE_MISMATCH_WARNING));
+            "});"));
 
     // Using @type instead of @param on a setter.
     test(
         "class C { /** @type {string} */ set value(v) { } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
-            "/** @type {?} */",
-            "C.prototype.value;",
             "$jscomp.global.Object.defineProperties(C.prototype, {",
             "  value: {",
             "    configurable: true,",
@@ -1961,8 +1767,7 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "    /** @type {string} */",
             "    set: function(v) {}",
             "  }",
-            "});"),
-        warning(TypeValidator.TYPE_MISMATCH_WARNING));
+            "});"));
   }
 
   /** @bug 20536614 */
@@ -1973,15 +1778,14 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class C { static get foo() {} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
-            "/** @nocollapse @type {?} */",
+            "/** @nocollapse */",
             "C.foo;",
             "$jscomp.global.Object.defineProperties(C, {",
             "  foo: {",
             "    configurable: true,",
             "    enumerable: true,",
-            "    /** @this {C} */",
             "    get: function() {}",
             "  }",
             "})"));
@@ -1989,24 +1793,22 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         lines("class C { static get foo() {} }", "class Sub extends C {}"),
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
-            "/** @nocollapse @type {?} */",
+            "/** @nocollapse */",
             "C.foo;",
             "$jscomp.global.Object.defineProperties(C, {",
             "  foo: {",
             "    configurable: true,",
             "    enumerable: true,",
-            "    /** @this {C} */",
             "    get: function() {}",
             "  }",
             "})",
             "",
-            "/** @constructor @struct",
+            "/** @constructor",
             " * @extends {C}",
-            " * @param {...?} var_args",
             " */",
-            "var Sub = function(var_args) {",
+            "var Sub = function() {",
             "  C.apply(this, arguments);",
             "};",
             "$jscomp.inherits(Sub, C)"));
@@ -2018,15 +1820,14 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class C { static set foo(x) {} }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
-            "/** @nocollapse @type {?} */",
+            "/** @nocollapse */",
             "C.foo;",
             "$jscomp.global.Object.defineProperties(C, {",
             "  foo: {",
             "    configurable: true,",
             "    enumerable: true,",
-            "    /** @this {C} */",
             "    set: function(x) {}",
             "  }",
             "});"));
@@ -2034,8 +1835,11 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
 
   @Test
   public void testInitSymbol() {
-    test("let a = alert(Symbol.thimble);", "$jscomp.initSymbol(); var a = alert(Symbol.thimble)");
-    assertThat(getLastCompiler().injected).containsExactly("es6/symbol");
+    test("let a = alert(Symbol.thimble);", "var a = alert(Symbol.thimble)");
+    assertThat(getLastCompiler().getInjected()).containsExactly("es6/symbol");
+
+    test("let a = alert(Symbol.iterator);", "var a = alert(Symbol.iterator)");
+    assertThat(getLastCompiler().getInjected()).containsExactly("es6/symbol");
 
     test(
         lines(
@@ -2046,7 +1850,6 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
         lines(
             "function f() {",
             "  var x = 1;",
-            "  $jscomp.initSymbol();",
             "  var y = Symbol('nimble');",
             "}"));
     test(
@@ -2062,11 +1865,9 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
             "  if (true) {",
             "     var Symbol$0 = function() {};",
             "  }",
-            "  $jscomp.initSymbol();",
             "  alert(Symbol.ism)",
             "}"));
 
-    // No $jscomp.initSymbol because "Symbol" doesn't refer to the global Symbol function here.
     test(
         lines(
             "function f() {",
@@ -2093,122 +1894,9 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "var x = {[Symbol.iterator]: function() { return this; }};",
         lines(
-            "$jscomp.initSymbol();",
-            "$jscomp.initSymbolIterator();",
             "var $jscomp$compprop0 = {};",
             "var x = ($jscomp$compprop0[Symbol.iterator] = function() {return this;},",
             "         $jscomp$compprop0)"));
-  }
-
-  @Test
-  public void testClassComputedPropGetter() {
-    setLanguageOut(LanguageMode.ECMASCRIPT5);
-
-    test(
-        "/** @unrestricted */ class C { /** @return {number} */ get [foo]() { return 4; }}",
-        lines(
-            "/** @constructor @unrestricted */",
-            "var C = function() {};",
-            "/** @type {number} */",
-            "C.prototype[foo];",
-            "var $jscomp$compprop0 = {};",
-            "$jscomp.global.Object.defineProperties(",
-            "  C.prototype,",
-            "  ($jscomp$compprop0[foo] = {",
-            "    configurable:true,",
-            "    enumerable:true,",
-            "    /**",
-            "     * @this {C}",
-            "     * @return {number}",
-            "     */",
-            "    get: function() { return 4; }",
-            "  }, $jscomp$compprop0));"));
-    assertThat(getLastCompiler().injected).containsExactly("util/global");
-
-    testError("class C { get [add + expr]() {} }", CANNOT_CONVERT);
-  }
-
-  @Test
-  public void testClassComputedPropSetter() {
-    setLanguageOut(LanguageMode.ECMASCRIPT5);
-
-    test(
-        "/** @unrestricted */ class C { /** @param {string} val */ set [foo](val) {}}",
-        lines(
-            "/** @constructor @unrestricted */",
-            "var C = function() {};",
-            "/** @type {string} */",
-            "C.prototype[foo];",
-            "var $jscomp$compprop0={};",
-            "$jscomp.global.Object.defineProperties(",
-            "  C.prototype,",
-            "  ($jscomp$compprop0[foo] = {",
-            "    configurable:true,",
-            "    enumerable:true,",
-            "    /**",
-            "     * @this {C}",
-            "     * @param {string} val",
-            "     */",
-            "    set: function(val) {}",
-            "  }, $jscomp$compprop0));"));
-
-    testError("class C { get [sub - expr]() {} }", CANNOT_CONVERT);
-  }
-
-  @Test
-  public void testClassStaticComputedProps() {
-    setLanguageOut(LanguageMode.ECMASCRIPT5);
-
-    testError("/** @unrestricted */ class C { static set [foo](val) {}}", CANNOT_CONVERT_YET);
-    testError("/** @unrestricted */ class C { static get [foo]() {}}", CANNOT_CONVERT_YET);
-  }
-
-  @Test
-  public void testClassComputedPropGetterAndSetter() {
-    setLanguageOut(LanguageMode.ECMASCRIPT5);
-
-    test(
-        lines(
-            "/** @unrestricted */",
-            "class C {",
-            "  /** @return {boolean} */",
-            "  get [foo]() {}",
-            "  /** @param {boolean} val */",
-            "  set [foo](val) {}",
-            "}"),
-        lines(
-            "/** @constructor @unrestricted */",
-            "var C = function() {};",
-            "/** @type {boolean} */",
-            "C.prototype[foo];",
-            "var $jscomp$compprop0={};",
-            "$jscomp.global.Object.defineProperties(",
-            "  C.prototype,",
-            "  ($jscomp$compprop0[foo] = {",
-            "    configurable:true,",
-            "    enumerable:true,",
-            "    /**",
-            "     * @this {C}",
-            "     * @return {boolean}",
-            "     */",
-            "    get: function() {},",
-            "    /**",
-            "     * @this {C}",
-            "     * @param {boolean} val",
-            "     */",
-            "    set: function(val) {},",
-            "  }, $jscomp$compprop0));"));
-
-    testError(
-        lines(
-            "/** @unrestricted */",
-            "class C {",
-            "  /** @return {boolean} */",
-            "  get [foo]() {}",
-            "  /** @param {string} val */",
-            "  set [foo](val) {}",
-            "}"),
-        CONFLICTING_GETTER_SETTER_TYPE);
   }
 
   /** ES5 getters and setters should report an error if the languageOut is ES3. */
@@ -2407,14 +2095,14 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test(
         "class C { [foo]() { alert(1); } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */",
             "var C = function() {};",
             "C.prototype[foo] = function() { alert(1); };"));
 
     test(
         "class C { static [foo]() { alert(2); } }",
         lines(
-            "/** @constructor @struct */",
+            "/** @constructor */", //
             "var C = function() {};",
             "C[foo] = function() { alert(2); };"));
   }
@@ -2457,86 +2145,6 @@ public final class Es6TranspilationIntegrationTest extends CompilerTestCase {
     test("`hello ${a + b}`", "'hello ' + (a + b)");
     test("`hello ${a, b, c}`", "'hello ' + (a, b, c)");
     test("`hello ${a ? b : c}${a * b}`", "'hello ' + (a ? b : c) + (a * b)");
-  }
-
-  @Test
-  public void testTaggedTemplateLiteral() {
-    test(
-        "tag``",
-        lines(
-            "var $jscomp$templatelit$0 = /** @type {!ITemplateArray} */ (['']);",
-            "$jscomp$templatelit$0.raw = $jscomp$templatelit$0.slice();",
-            "tag($jscomp$templatelit$0);"));
-
-    test(
-        "tag`${hello} world`",
-        lines(
-            "var $jscomp$templatelit$0 = /** @type {!ITemplateArray} */ (['', ' world']);",
-            "$jscomp$templatelit$0.raw = $jscomp$templatelit$0.slice();",
-            "tag($jscomp$templatelit$0, hello);"));
-
-    test(
-        "tag`${hello} ${world}`",
-        lines(
-            "var $jscomp$templatelit$0 = /** @type {!ITemplateArray} */ (['', ' ', '']);",
-            "$jscomp$templatelit$0.raw = $jscomp$templatelit$0.slice();",
-            "tag($jscomp$templatelit$0, hello, world);"));
-
-    test(
-        "tag`\"`",
-        lines(
-            "var $jscomp$templatelit$0 = /** @type {!ITemplateArray} */ (['\\\"']);",
-            "$jscomp$templatelit$0.raw = $jscomp$templatelit$0.slice();",
-            "tag($jscomp$templatelit$0);"));
-
-    // The cooked string and the raw string are different.
-    // Note that this test is tricky to read, because any escape sequences will be escaped twice.
-    // This table is helpful:
-    //
-    //     Java String    JavaScript String      JavaScript Value
-    //
-    //     ----------------------------------------------------------------
-    //     \t        ->   <tab character>    -> <tab character> (length: 1)
-    //     \\t       ->   \t                 -> <tab character> (length: 1)
-    //     \\\t      ->   \<tab character>   -> <tab character> (length: 1)
-    //     \\\\t     ->   \\t                -> \t              (length: 2)
-    //
-    test(
-        "tag`a\\tb`",
-        lines(
-            "var $jscomp$templatelit$0 = /** @type {!ITemplateArray} */ (['a\\tb']);",
-            "$jscomp$templatelit$0.raw = ['a\\\\tb'];",
-            "tag($jscomp$templatelit$0);"));
-
-    test(
-        "tag()`${hello} world`",
-        lines(
-            "var $jscomp$templatelit$0 = /** @type {!ITemplateArray} */ (['', ' world']);",
-            "$jscomp$templatelit$0.raw = $jscomp$templatelit$0.slice();",
-            "tag()($jscomp$templatelit$0, hello);"));
-
-    test(
-        "a.b`${hello} world`",
-        lines(
-            "var $jscomp$templatelit$0 = /** @type {!ITemplateArray} */ (['', ' world']);",
-            "$jscomp$templatelit$0.raw = $jscomp$templatelit$0.slice();",
-            "a.b($jscomp$templatelit$0, hello);"));
-
-    // https://github.com/google/closure-compiler/issues/1299
-    test(
-        "tag`<p class=\"foo\">${x}</p>`",
-        lines(
-            "var $jscomp$templatelit$0 = "
-                + "/** @type {!ITemplateArray} */ (['<p class=\"foo\">', '</p>']);",
-            "$jscomp$templatelit$0.raw = $jscomp$templatelit$0.slice();",
-            "tag($jscomp$templatelit$0, x);"));
-    test(
-        "tag`<p class='foo'>${x}</p>`",
-        lines(
-            "var $jscomp$templatelit$0 = "
-                + "/** @type {!ITemplateArray} */ (['<p class=\\'foo\\'>', '</p>']);",
-            "$jscomp$templatelit$0.raw = $jscomp$templatelit$0.slice();",
-            "tag($jscomp$templatelit$0, x);"));
   }
 
   @Test

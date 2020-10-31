@@ -55,21 +55,33 @@ import java.util.Set;
 public class EnumType extends PrototypeObjectType {
   private static final long serialVersionUID = 1L;
 
+  private static final JSTypeClass TYPE_CLASS = JSTypeClass.ENUM;
+
   // the type of the individual elements
   private EnumElementType elementsType;
   // the elements' names (they all have the same type)
   private final Set<String> elements = new HashSet<>();
+  // the node representing rhs of the enum
+  private final Node source;
 
   /**
    * Creates an enum type.
    *
    * @param name the enum's name
+   * @param source the object literal that creates the enum, a reference to another enum, or null.
    * @param elementsType the base type of the individual elements
    */
-  EnumType(JSTypeRegistry registry, String name, Node source,
-      JSType elementsType) {
-    super(registry, "enum{" + name + "}", null);
+  EnumType(JSTypeRegistry registry, String name, Node source, JSType elementsType) {
+    super(PrototypeObjectType.builder(registry).setName("enum{" + name + "}"));
     this.elementsType = new EnumElementType(registry, elementsType, name, this);
+    this.source = source;
+
+    registry.getResolver().resolveIfClosed(this, TYPE_CLASS);
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return TYPE_CLASS;
   }
 
   @Override
@@ -119,25 +131,12 @@ public class EnumType extends PrototypeObjectType {
     if (result != null) {
       return result;
     }
-    return this.isEquivalentTo(that) ? TRUE : FALSE;
+    return this.equals(that) ? TRUE : FALSE;
   }
 
   @Override
-  public boolean isSubtype(JSType that) {
-    return isSubtype(that, ImplCache.create(), SubtypingMode.NORMAL);
-  }
-
-  @Override
-  protected boolean isSubtype(JSType that,
-      ImplCache implicitImplCache, SubtypingMode subtypingMode) {
-    return that.isEquivalentTo(getNativeType(JSTypeNative.OBJECT_TYPE)) ||
-        that.isEquivalentTo(getNativeType(JSTypeNative.OBJECT_PROTOTYPE)) ||
-        JSType.isSubtypeHelper(this, that, implicitImplCache, subtypingMode);
-  }
-
-  @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return sb.append(forAnnotations ? "!Object" : getReferenceName());
+  void appendTo(TypeStringBuilder sb) {
+    sb.append(sb.isForAnnotations() ? "!Object" : getReferenceName());
   }
 
   @Override
@@ -172,6 +171,10 @@ public class EnumType extends PrototypeObjectType {
   @Override
   public boolean matchesObjectContext() {
     return true;
+  }
+
+  public final Node getSource() {
+    return source;
   }
 
   @Override

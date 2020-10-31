@@ -20,12 +20,15 @@ import static com.google.javascript.jscomp.ClosureCheckModule.DUPLICATE_NAME_SHO
 import static com.google.javascript.jscomp.ClosureCheckModule.EXPORT_NOT_AT_MODULE_SCOPE;
 import static com.google.javascript.jscomp.ClosureCheckModule.EXPORT_NOT_A_STATEMENT;
 import static com.google.javascript.jscomp.ClosureCheckModule.EXPORT_REPEATED_ERROR;
+import static com.google.javascript.jscomp.ClosureCheckModule.GOOG_MODULE_IN_NON_MODULE;
+import static com.google.javascript.jscomp.ClosureCheckModule.GOOG_MODULE_MISPLACED;
 import static com.google.javascript.jscomp.ClosureCheckModule.GOOG_MODULE_REFERENCES_THIS;
 import static com.google.javascript.jscomp.ClosureCheckModule.GOOG_MODULE_USES_THROW;
 import static com.google.javascript.jscomp.ClosureCheckModule.INCORRECT_SHORTNAME_CAPITALIZATION;
 import static com.google.javascript.jscomp.ClosureCheckModule.INVALID_DESTRUCTURING_REQUIRE;
-import static com.google.javascript.jscomp.ClosureCheckModule.JSDOC_REFERENCE_TO_FULLY_QUALIFIED_IMPORT_NAME;
-import static com.google.javascript.jscomp.ClosureCheckModule.JSDOC_REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME;
+import static com.google.javascript.jscomp.ClosureCheckModule.LEGACY_NAMESPACE_ARGUMENT;
+import static com.google.javascript.jscomp.ClosureCheckModule.LEGACY_NAMESPACE_NOT_AFTER_GOOG_MODULE;
+import static com.google.javascript.jscomp.ClosureCheckModule.LEGACY_NAMESPACE_NOT_AT_TOP_LEVEL;
 import static com.google.javascript.jscomp.ClosureCheckModule.LET_GOOG_REQUIRE;
 import static com.google.javascript.jscomp.ClosureCheckModule.MULTIPLE_MODULES_IN_FILE;
 import static com.google.javascript.jscomp.ClosureCheckModule.ONE_REQUIRE_PER_DECLARATION;
@@ -33,6 +36,7 @@ import static com.google.javascript.jscomp.ClosureCheckModule.REFERENCE_TO_FULLY
 import static com.google.javascript.jscomp.ClosureCheckModule.REFERENCE_TO_MODULE_GLOBAL_NAME;
 import static com.google.javascript.jscomp.ClosureCheckModule.REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME;
 import static com.google.javascript.jscomp.ClosureCheckModule.REQUIRE_NOT_AT_TOP_LEVEL;
+import static com.google.javascript.jscomp.ClosureCheckModule.USE_OF_GOOG_PROVIDE;
 import static com.google.javascript.jscomp.ClosurePrimitiveErrors.INVALID_DESTRUCTURING_FORWARD_DECLARE;
 import static com.google.javascript.jscomp.ClosurePrimitiveErrors.MODULE_USES_GOOG_MODULE_GET;
 
@@ -67,6 +71,7 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
   protected CompilerOptions getOptions() {
     CompilerOptions options = super.getOptions();
     options.setWarningLevel(DiagnosticGroups.LINT_CHECKS, CheckLevel.ERROR);
+    options.setWarningLevel(DiagnosticGroups.STRICT_MODULE_CHECKS, CheckLevel.ERROR);
     return options;
   }
 
@@ -152,6 +157,39 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
   }
 
   @Test
+  public void testMisplacedGoogModuleCall() {
+    testError(
+        lines(
+            "var x;", //
+            "goog.module('xyz');"),
+        GOOG_MODULE_MISPLACED);
+
+    testError(
+        lines(
+            ";", //
+            "goog.module('xyz');"),
+        GOOG_MODULE_MISPLACED);
+
+    testError(
+        lines(
+            "function fn() {", //
+            "  goog.module('xyz');",
+            " }"),
+        GOOG_MODULE_MISPLACED);
+
+    testError("const mod =  goog.module('xyz');", GOOG_MODULE_MISPLACED);
+
+    testError(
+        lines(
+            "goog.loadModule(function(exports) {",
+            "  var x;",
+            "  goog.module('xyz');",
+            "  return exports;",
+            "})"),
+        GOOG_MODULE_IN_NON_MODULE);
+  }
+
+  @Test
   public void testBundledGoogModules() {
     testError(
         lines(
@@ -203,59 +241,65 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
 
   @Test
   public void testBundledGoogModulesAndProvides() {
-    testSame(
-        lines(
-            "goog.provide('first.provide');",
-            "first.provide = 0;",
-            "",
-            "goog.provide('second.provide');",
-            "second.provide = 0;",
-            "",
-            "goog.loadModule(function(exports){",
-            "  'use strict';",
-            "  goog.module('Xyz');",
-            "  const first = goog.require('first.provide');",
-            "  exports = class {}",
-            "  return exports;",
-            "});",
-            "",
-            "goog.loadModule(function(exports){",
-            "  goog.module('abc');",
-            "  const Foo = goog.require('Xyz');",
-            "  const second = goog.require('second.provide');",
-            "  var x = new Foo;",
-            "  return exports;",
-            "});"));
+    test(
+        srcs(
+            lines(
+                "goog.provide('first.provide');",
+                "first.provide = 0;",
+                "",
+                "goog.provide('second.provide');",
+                "second.provide = 0;",
+                "",
+                "goog.loadModule(function(exports){",
+                "  'use strict';",
+                "  goog.module('Xyz');",
+                "  const first = goog.require('first.provide');",
+                "  exports = class {}",
+                "  return exports;",
+                "});",
+                "",
+                "goog.loadModule(function(exports){",
+                "  goog.module('abc');",
+                "  const Foo = goog.require('Xyz');",
+                "  const second = goog.require('second.provide');",
+                "  var x = new Foo;",
+                "  return exports;",
+                "});")),
+        error(USE_OF_GOOG_PROVIDE),
+        error(USE_OF_GOOG_PROVIDE));
   }
 
   @Test
   public void testBundledGoogModulesAndProvidesWithGoog() {
-    testSame(
-        lines(
-            "/** @provideGoog */",
-            "var goog = {};",
-            "",
-            "goog.provide('first.provide');",
-            "first.provide = 0;",
-            "",
-            "goog.provide('second.provide');",
-            "second.provide = 0;",
-            "",
-            "goog.loadModule(function(exports){",
-            "  'use strict';",
-            "  goog.module('Xyz');",
-            "  const first = goog.require('first.provide');",
-            "  exports = class {}",
-            "  return exports;",
-            "});",
-            "",
-            "goog.loadModule(function(exports){",
-            "  goog.module('abc');",
-            "  const Foo = goog.require('Xyz');",
-            "  const second = goog.require('second.provide');",
-            "  var x = new Foo;",
-            "  return exports;",
-            "});"));
+    test(
+        srcs(
+            lines(
+                "/** @provideGoog */",
+                "var goog = {};",
+                "",
+                "goog.provide('first.provide');",
+                "first.provide = 0;",
+                "",
+                "goog.provide('second.provide');",
+                "second.provide = 0;",
+                "",
+                "goog.loadModule(function(exports){",
+                "  'use strict';",
+                "  goog.module('Xyz');",
+                "  const first = goog.require('first.provide');",
+                "  exports = class {}",
+                "  return exports;",
+                "});",
+                "",
+                "goog.loadModule(function(exports){",
+                "  goog.module('abc');",
+                "  const Foo = goog.require('Xyz');",
+                "  const second = goog.require('second.provide');",
+                "  var x = new Foo;",
+                "  return exports;",
+                "});")),
+        error(USE_OF_GOOG_PROVIDE),
+        error(USE_OF_GOOG_PROVIDE));
   }
 
   @Test
@@ -419,11 +463,50 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
 
   @Test
   public void testIllegalDeclareLegacyNamespace() {
+    test(
+        srcs(
+            lines(
+                "goog.provide('a.provided.namespace');", //
+                "goog.module.declareLegacyNamespace();")),
+        error(DECLARE_LEGACY_NAMESPACE_IN_NON_MODULE),
+        error(USE_OF_GOOG_PROVIDE));
+
     testError(
         lines(
-            "goog.provide('a.provided.namespace');",
+            "goog.module('xyz');", //
+            "const ns = goog.module.declareLegacyNamespace();"),
+        LEGACY_NAMESPACE_NOT_AT_TOP_LEVEL);
+
+    testError(
+        lines(
+            "goog.module('xyz');", //
+            "if (cond) {",
+            "  goog.module.declareLegacyNamespace();",
+            "}"),
+        LEGACY_NAMESPACE_NOT_AFTER_GOOG_MODULE);
+
+    testError(
+        lines(
+            "goog.module('xyz');", //
+            "var foo = 0;",
             "goog.module.declareLegacyNamespace();"),
-        DECLARE_LEGACY_NAMESPACE_IN_NON_MODULE);
+        LEGACY_NAMESPACE_NOT_AFTER_GOOG_MODULE);
+
+    testError(
+        lines(
+            "goog.loadModule(function(exports) {",
+            "  goog.module('xyz');",
+            "  var x;",
+            "  goog.module.declareLegacyNamespace();",
+            "  return exports",
+            "});"),
+        LEGACY_NAMESPACE_NOT_AFTER_GOOG_MODULE);
+
+    testError(
+        lines(
+            "goog.module('my.mod');", //
+            "goog.module.declareLegacyNamespace('some comment');"),
+        LEGACY_NAMESPACE_ARGUMENT);
   }
 
   @Test
@@ -522,7 +605,7 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
             "var A = goog.require('foo.A');",
             "",
             "/** @constructor @implements {foo.A} */ function B() {}"),
-        JSDOC_REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
+        REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
 
     testError(
         lines(
@@ -531,7 +614,7 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
             "var A = goog.requireType('foo.A');",
             "",
             "/** @constructor @implements {foo.A} */ function B() {}"),
-        JSDOC_REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
+        REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
 
     testError(
         lines(
@@ -540,7 +623,7 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
             "var A = goog.require('foo.A');",
             "",
             "/** @type {foo.A} */ var a;"),
-        JSDOC_REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
+        REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
 
     testError(
         lines(
@@ -549,7 +632,7 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
             "var A = goog.requireType('foo.A');",
             "",
             "/** @type {foo.A} */ var a;"),
-        JSDOC_REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
+        REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
 
     testSame(
         lines(
@@ -590,7 +673,7 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
             "var ns = goog.require('some.namespace');",
             "",
             "/** @type {some.namespace.Foo} */ var foo;"),
-        JSDOC_REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
+        REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
 
     testError(
         lines(
@@ -599,7 +682,7 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
             "var ns = goog.requireType('some.namespace');",
             "",
             "/** @type {some.namespace.Foo} */ var foo;"),
-        JSDOC_REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
+        REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
 
     testError(
         lines(
@@ -608,7 +691,7 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
             "var ns = goog.require('some.namespace');",
             "",
             "/** @type {Array<some.namespace.Foo>} */ var foos;"),
-        JSDOC_REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
+        REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
 
     testError(
         lines(
@@ -617,7 +700,7 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
             "var ns = goog.requireType('some.namespace');",
             "",
             "/** @type {Array<some.namespace.Foo>} */ var foos;"),
-        JSDOC_REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
+        REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
   }
 
   @Test
@@ -659,14 +742,14 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
         lines(
             "goog.module('x.y.z');",
             "",
-            "goog.requireType('foo');",
+            "goog.requireType('foo.Bar');",
             "",
-            "/** @type {foo.Foo} */ var foo;"),
-        JSDOC_REFERENCE_TO_FULLY_QUALIFIED_IMPORT_NAME);
+            "/** @type {foo.Bar} */ var foo;"),
+        REFERENCE_TO_FULLY_QUALIFIED_IMPORT_NAME);
   }
 
-  // TODO(johnlenz): Re-enable these tests (they are a bit tricky).
-  public void disable_testSingleNameImportNoAlias1() {
+  @Test
+  public void testSingleNameImportNoAlias1() {
     testError(
         lines(
             "goog.module('x.y.z');",
@@ -677,7 +760,8 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
         REFERENCE_TO_FULLY_QUALIFIED_IMPORT_NAME);
   }
 
-  public void disable_testSingleNameImportWithAlias() {
+  @Test
+  public void testSingleNameImportWithRenamingAlias() {
     testError(
         lines(
             "goog.module('x.y.z');",
@@ -685,7 +769,7 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
             "var bar = goog.require('foo');",
             "",
             "exports = function() { return foo.doThing(''); };"),
-        REFERENCE_TO_FULLY_QUALIFIED_IMPORT_NAME);
+        REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME);
   }
 
   @Test
@@ -709,6 +793,18 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
             "var foo = goog.require('foo');",
             "",
             "exports = function() { return foo.doThing(''); };"));
+  }
+
+  @Test
+  public void testSingleNameImportShadowed() {
+    testSame(
+        lines(
+            "goog.module('x.y.z');",
+            "",
+            "// for side-effects only",
+            "goog.require('foo');",
+            "",
+            "exports = function(foo) { return foo.doThing(''); };"));
   }
 
   @Test
@@ -825,17 +921,6 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
             "exports = class {};",
             "exports.y = 'str';",
             "exports.y = decorate(exports.y);"));
-
-    // This pattern is used by typescript in a way that won't violate our goog.module assumptions.
-    testSame(
-        lines(
-            "/** @fileoverview @suppress {googModuleExportNotAStatement} */",
-            "goog.module('xyz');",
-            "",
-            "((x) => {})(exports.y || (exports.y = {}));",
-            "",
-            "((x) => {})(exports.y || (exports.y = {}));",
-            ""));
   }
 
   @Test
@@ -845,5 +930,15 @@ public final class ClosureCheckModuleTest extends CompilerTestCase {
             "goog.module('foo');",
             "",
             "var a = goog.require('abc.');"));
+  }
+
+  @Test
+  public void testAllowGoogProvideDeclaration() {
+    testSame("const goog = {}; goog.provide = function(ns) {};");
+  }
+
+  @Test
+  public void testWarnOnGoogProvideCall() {
+    testError("goog.provide('foo.bar');", ClosureCheckModule.USE_OF_GOOG_PROVIDE);
   }
 }

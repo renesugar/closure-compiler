@@ -24,12 +24,11 @@
 
 // TODO: Almost all of it has not been annotated with types.
 
-/** @type {number} */ Event.prototype.HORIZONTAL_AXIS;
-/** @type {number} */ Event.prototype.VERTICAL_AXIS;
+/** @const {number} */ Event.prototype.HORIZONTAL_AXIS;
+/** @const {number} */ Event.prototype.VERTICAL_AXIS;
 /** @type {boolean} */ Event.prototype.altKey;
 /** @type {number} */ Event.prototype.axis;
 /** @type {number} */ Event.prototype.button;
-/** @type {boolean} */ Event.prototype.cancelBubble;
 /** @type {number} */ Event.prototype.charCode;
 /** @type {number} */ Event.prototype.clientX;
 /** @type {number} */ Event.prototype.clientY;
@@ -50,6 +49,13 @@
 /** @type {boolean} */ Event.prototype.shiftKey;
 /** @type {Window} */ Event.prototype.view;
 /** @type {number} */ Event.prototype.which;
+
+/**
+ * @type {boolean}
+ * @deprecated cancelBubble is obsolete and is no-op in modern browsers. Use
+ *     stopPropagation() instead.
+ */
+Event.prototype.cancelBubble;
 
 /** @constructor */ function nsIDOMPageTransitionEvent() {}
 /** @type {boolean} */ nsIDOMPageTransitionEvent.prototype.persisted;

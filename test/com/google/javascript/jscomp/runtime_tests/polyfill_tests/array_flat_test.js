@@ -60,26 +60,6 @@ testSuite({
     assertObjectEquals([1, 2, 3, 4, 5, 6, 7, 8], arr.flat(4));
   },
 
-  testFlat_nonNumericDepths() {
-    var arr = [1, 2, [3, 4, [5, 6, [7, 8]]]];
-
-    assertObjectEquals(arr.flat(1), arr.flat());
-    assertObjectEquals(arr.flat(1), arr.flat(undefined));
-    assertObjectEquals(arr.flat(1), arr.flat(true));
-
-    assertObjectEquals(arr.flat(0), arr.flat(null));
-    assertObjectEquals(arr.flat(0), arr.flat(false));
-    assertObjectEquals(arr.flat(0), arr.flat({}));
-    assertObjectEquals(arr.flat(0), arr.flat([]));
-    assertObjectEquals(arr.flat(0), arr.flat(() => 1));
-
-    assertObjectEquals(arr.flat(3), arr.flat(Infinity));
-
-    assertObjectEquals(arr.flat(0), arr.flat('0'));
-    assertObjectEquals(arr.flat(1), arr.flat('1'));
-    assertObjectEquals(arr.flat(0), arr.flat('1a'));
-  },
-
   testFlat_makesShalowCopies() {
     var arr = [1, 2, [3, 4]];
     var copy = arr.flat(0);
@@ -109,6 +89,12 @@ testSuite({
   },
 
   testFlat_arraySubclassWithOverriddenPush() {
+    /**
+     * @param {T} element
+     * @return {T}
+     * @this {!IArrayLike<T>}
+     * @template T
+     */
     var customPush = function(element) {
       Array.prototype.push.call(this, element);
       return Array.prototype.push.call(this, element);
@@ -125,7 +111,12 @@ testSuite({
 
   /** @suppress {checkTypes} */
   testFlat_arraySubclassWithOverriddenFlat() {
-    var customFlat = function(element) {
+    /**
+     * @return {!Array<T>}
+     * @this {!Array<?>}
+     * @template T
+     */
+    var customFlat = function() {
       return Array.prototype.concat.call(this, 'very flat');
     };
 

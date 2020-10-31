@@ -17,12 +17,18 @@
 package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import com.google.common.base.Strings;
 import com.google.common.base.Supplier;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.errorprone.annotations.MustBeClosed;
+import com.google.errorprone.annotations.OverridingMethodsMustInvokeSuper;
 import com.google.javascript.jscomp.deps.ModuleLoader;
+import com.google.javascript.jscomp.diagnostic.LogFile;
 import com.google.javascript.jscomp.modules.ModuleMap;
 import com.google.javascript.jscomp.modules.ModuleMetadataMap;
 import com.google.javascript.jscomp.parsing.Config;
@@ -34,6 +40,8 @@ import com.google.javascript.rhino.InputId;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.jstype.JSTypeRegistry;
 import java.io.Serializable;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,26 +49,27 @@ import java.util.Set;
 import javax.annotation.Nullable;
 
 /**
- * An abstract compiler, to help remove the circular dependency of
- * passes on JSCompiler.
+ * An abstract compiler, to help remove the circular dependency of passes on JSCompiler.
  *
- * This is an abstract class, so that we can make the methods package-private.
- *
- * @author nicksantos@google.com (Nick Santos)
+ * <p>This is an abstract class, so that we can make the methods package-private.
  */
-public abstract class AbstractCompiler implements SourceExcerptProvider {
+public abstract class AbstractCompiler implements SourceExcerptProvider, CompilerInputProvider {
   static final DiagnosticType READ_ERROR = DiagnosticType.error(
       "JSC_READ_ERROR", "Cannot read file {0}: {1}");
 
   protected Map<String, Object> annotationMap = new HashMap<>();
 
-  /** Will be called before each pass runs. */
-  abstract void beforePass(String passName);
+  private int currentPassIndex = -1;
 
-  /**
-   * Will be called after each pass finishes.
-   */
-  abstract void afterPass(String passName);
+  /** Will be called before each pass runs. */
+  @OverridingMethodsMustInvokeSuper
+  void beforePass(String passName) {
+    this.currentPassIndex++;
+  }
+
+  /** Will be called after each pass finishes. */
+  @OverridingMethodsMustInvokeSuper
+  void afterPass(String passName) {}
 
   private LifeCycleStage stage = LifeCycleStage.RAW;
 
@@ -79,7 +88,7 @@ public abstract class AbstractCompiler implements SourceExcerptProvider {
   abstract SourceFile getSourceFileByName(String sourceName);
 
   @Nullable
-  abstract Node getScriptNode(String filename);
+  public abstract Node getScriptNode(String filename);
 
   /** Gets the module graph. */
   @Nullable
@@ -119,6 +128,9 @@ public abstract class AbstractCompiler implements SourceExcerptProvider {
 
   /** Sets the css names found during compilation. */
   public abstract void setCssNames(Map<String, Integer> newCssNames);
+
+  /** Sets the mapping for instrumentation parameter encoding. */
+  public abstract void setInstrumentationMapping(VariableMap instrumentationMapping);
 
   /** Sets the id generator for cross-module motion. */
   public abstract void setIdGeneratorMap(String serializedIdMappings);
@@ -227,29 +239,21 @@ public abstract class AbstractCompiler implements SourceExcerptProvider {
    */
   abstract Node getNodeForCodeInsertion(@Nullable JSModule module);
 
-  /**
-   * Only used by passes in the old type checker.
-   */
   abstract TypeValidator getTypeValidator();
 
-  /**
-   * Gets the central registry of type violations.
-   */
-  abstract Iterable<TypeMismatch> getTypeMismatches();
+  /** Gets the central registry of type violations. */
+  public abstract Iterable<TypeMismatch> getTypeMismatches();
 
   /**
-   * Gets all types that are used implicitly as a
-   * matching interface type. These are
-   * recorded as TypeMismatchs only for convenience
+   * Gets all types that are used implicitly as a matching interface type. These are recorded as
+   * TypeMismatchs only for convenience
    */
-  abstract Iterable<TypeMismatch> getImplicitInterfaceUses();
+  public abstract Iterable<TypeMismatch> getImplicitInterfaceUses();
 
   abstract void setExternExports(String externExports);
 
-  /**
-   * Parses code for injecting.
-   */
-  abstract Node parseSyntheticCode(String code);
+  /** Parses code for injecting. */
+  public abstract Node parseSyntheticCode(String code);
 
   /**
    * Parses code for injecting, and associate it with a given source file.
@@ -261,6 +265,10 @@ public abstract class AbstractCompiler implements SourceExcerptProvider {
    */
   @VisibleForTesting
   abstract Node parseTestCode(String code);
+
+  /** Parses code for testing. */
+  @VisibleForTesting
+  abstract Node parseTestCode(ImmutableList<String> code);
 
   /**
    * Prints a node to source code.
@@ -282,10 +290,8 @@ public abstract class AbstractCompiler implements SourceExcerptProvider {
    */
   public abstract ReverseAbstractInterpreter getReverseAbstractInterpreter();
 
-  /**
-   * @return The current life-cycle stage of the AST we're working on.
-   */
-  LifeCycleStage getLifeCycleStage() {
+  /** Returns the current life-cycle stage of the AST we're working on. */
+  public LifeCycleStage getLifeCycleStage() {
     return stage;
   }
 
@@ -302,8 +308,20 @@ public abstract class AbstractCompiler implements SourceExcerptProvider {
   }
 
   /**
-   * Generates unique ids.
+   * Generates unique String Ids when requested via a compiler instance.
+   *
+   * <p>This supplier provides Ids that are deterministic and unique across all input files given to
+   * the compiler. The generated ID format is: uniqueId = "fileHashCode$counterForThisFile"
    */
+  abstract UniqueIdSupplier getUniqueIdSupplier();
+
+  /**
+   * Generates unique ids.
+   *
+   * @deprecated because the generated names during transpilation are not unique across all input
+   *     files. Use the new supplier by calling {@code getUniqueIdSupplier()}.
+   */
+  @Deprecated
   abstract Supplier<String> getUniqueNameIdSupplier();
 
   /**
@@ -421,7 +439,8 @@ public abstract class AbstractCompiler implements SourceExcerptProvider {
    */
   abstract CheckLevel getErrorLevel(JSError error);
 
-  static enum LifeCycleStage implements Serializable {
+  /** What point in optimizations we're in. For use by compiler passes */
+  public static enum LifeCycleStage implements Serializable {
     RAW,
 
     // See constraints put on the tree by Normalize.java
@@ -432,15 +451,15 @@ public abstract class AbstractCompiler implements SourceExcerptProvider {
     // coding conventions no longer apply.
     NORMALIZED_OBFUSCATED;
 
-    boolean isNormalized() {
+    public boolean isNormalized() {
       return this == NORMALIZED || this == NORMALIZED_OBFUSCATED;
     }
 
-    boolean isNormalizedUnobfuscated() {
+    public boolean isNormalizedUnobfuscated() {
       return this == NORMALIZED;
     }
 
-    boolean isNormalizedObfuscated() {
+    public boolean isNormalizedObfuscated() {
       return this == NORMALIZED_OBFUSCATED;
     }
   }
@@ -558,8 +577,8 @@ public abstract class AbstractCompiler implements SourceExcerptProvider {
   abstract void setExternProperties(Set<String> externProperties);
 
   /**
-   * Gets the names of the properties defined in externs or null if
-   * GatherExternProperties pass was not run yet.
+   * Gets the names of the properties defined in externs or null if GatherExternProperties pass was
+   * not run yet.
    */
   abstract Set<String> getExternProperties();
 
@@ -571,88 +590,16 @@ public abstract class AbstractCompiler implements SourceExcerptProvider {
 
   abstract void addComments(String filename, List<Comment> comments);
 
-  /** Indicates whether a property has a getter or a setter, or both. */
-  public enum PropertyAccessKind {
-    // To save space properties without getters or setters won't appear
-    // in the maps at all, but NORMAL will be returned by some methods.
-    NORMAL(0),
-    GETTER_ONLY(1),
-    SETTER_ONLY(2),
-    GETTER_AND_SETTER(3);
-
-    final byte flags;
-
-    PropertyAccessKind(int flags) {
-      this.flags = (byte) flags;
-    }
-
-    boolean hasGetter() {
-      return (flags & 1) != 0;
-    }
-
-    boolean hasSetter() {
-      return (flags & 2) != 0;
-    }
-
-    boolean hasGetterOrSetter() {
-      return (flags & 3) != 0;
-    }
-
-    // used to combine information from externs and from sources
-    PropertyAccessKind unionWith(PropertyAccessKind other) {
-      int combinedFlags = this.flags | other.flags;
-      switch (combinedFlags) {
-        case 0:
-          return NORMAL;
-        case 1:
-          return GETTER_ONLY;
-        case 2:
-          return SETTER_ONLY;
-        case 3:
-          return GETTER_AND_SETTER;
-        default:
-          throw new IllegalStateException("unexpected value: " + combinedFlags);
-      }
-    }
-  }
-
   /**
-   * Returns a map containing an entry for every property name found in the externs files with
-   * a getter and / or setter defined.
+   * Returns a summary an entry for every property name found in the AST with a getter and / or
+   * setter defined.
    *
    * <p>Property names for which there are no getters or setters will not be in the map.
    */
-  abstract ImmutableMap<String, PropertyAccessKind> getExternGetterAndSetterProperties();
+  abstract AccessorSummary getAccessorSummary();
 
-  /** Sets the map of extern properties with getters and setters. */
-  abstract void setExternGetterAndSetterProperties(
-      ImmutableMap<String, PropertyAccessKind> externGetterAndSetterProperties);
-
-  /**
-   * Returns a map containing an entry for every property name found in the source AST with
-   * a getter and / or setter defined.
-   *
-   * <p>Property names for which there are no getters or setters will not be in the map.
-   */
-  abstract ImmutableMap<String, PropertyAccessKind> getSourceGetterAndSetterProperties();
-
-  /** Sets the map of properties with getters and setters defined in the sources AST. */
-  abstract void setSourceGetterAndSetterProperties(
-      ImmutableMap<String, PropertyAccessKind> externGetterAndSetterProperties);
-
-  /**
-   * Returns any property seen in the externs or source with the given name was a getter, setter, or
-   * both.
-   *
-   * <p>This defaults to {@link PropertyAccessKind#NORMAL} for any property not known to have a
-   * getter or setter, even for property names that do not exist in the given program.
-   */
-  final PropertyAccessKind getPropertyAccessKind(String property) {
-    return getExternGetterAndSetterProperties()
-        .getOrDefault(property, PropertyAccessKind.NORMAL)
-        .unionWith(
-            getSourceGetterAndSetterProperties().getOrDefault(property, PropertyAccessKind.NORMAL));
-  }
+  /** Sets the summary of properties with getters and setters. */
+  abstract void setAccessorSummary(AccessorSummary summary);
 
   /**
    * Returns all the comments from the given file.
@@ -705,12 +652,28 @@ public abstract class AbstractCompiler implements SourceExcerptProvider {
 
   /**
    * Returns a new AstFactory that will add type information to the nodes it creates if and only if
-   * type type checking has already happened.
+   * type checking has already happened.
    */
   public AstFactory createAstFactory() {
     return hasTypeCheckingRun()
         ? AstFactory.createFactoryWithTypes(getTypeRegistry())
         : AstFactory.createFactoryWithoutTypes();
+  }
+
+  /**
+   * Returns a new AstFactory that will not add type information, regardless of whether type
+   * checking has already happened.
+   */
+  public AstFactory createAstFactoryWithoutTypes() {
+    return AstFactory.createFactoryWithoutTypes();
+  }
+
+  /**
+   * Returns a new AstAnalyzer configured correctly to answer questions about Nodes in the AST
+   * currently being compiled.
+   */
+  public AstAnalyzer getAstAnalyzer() {
+    return new AstAnalyzer(this, getOptions().getAssumeGettersArePure());
   }
 
   public abstract ModuleMetadataMap getModuleMetadataMap();
@@ -720,4 +683,62 @@ public abstract class AbstractCompiler implements SourceExcerptProvider {
   public abstract ModuleMap getModuleMap();
 
   public abstract void setModuleMap(ModuleMap moduleMap);
+
+  /** Provides logging access to a file with the specified name. */
+  @MustBeClosed
+  public final LogFile createOrReopenLog(
+      Class<?> owner, String firstNamePart, String... restNameParts) {
+    @Nullable Path dir = getOptions().getDebugLogDirectory();
+    if (dir == null) {
+      return LogFile.createNoOp();
+    }
+
+    Path relativeParts = Paths.get(firstNamePart, restNameParts);
+    Path file = dir.resolve(owner.getSimpleName()).resolve(relativeParts);
+    return LogFile.createOrReopen(file);
+  }
+
+  /**
+   * Provides logging access to a file with the specified name, differentiated by the index of the
+   * current pass.
+   *
+   * <p>Indexing helps in separating logs from different pass loops. The filename pattern is
+   * "[debug_log_directory]/[owner_name]/([name_part[i]]/){0,n-1}[pass_index]_[name_part[n]]".
+   */
+  @MustBeClosed
+  public final LogFile createOrReopenIndexedLog(
+      Class<?> owner, String firstNamePart, String... restNameParts) {
+    checkState(this.currentPassIndex >= 0);
+
+    String index = Strings.padStart(Integer.toString(this.currentPassIndex), 3, '0');
+    int length = restNameParts.length;
+    if (length == 0) {
+      firstNamePart = index + "_" + firstNamePart;
+    } else {
+      restNameParts[length - 1] = index + "_" + restNameParts[length - 1];
+    }
+
+    return this.createOrReopenLog(owner, firstNamePart, restNameParts);
+  }
+
+  /** Returns the InputId of the synthetic code input (even if it is not initialized yet). */
+  abstract InputId getSyntheticCodeInputId();
+
+  /**
+   * Adds a synthetic script to the front of the AST
+   *
+   * <p>Useful to allow inserting code into the global scope, earlier than any of the user-provided
+   * code, in the case that the first user-provided input is a module.
+   */
+  abstract void initializeSyntheticCodeInput();
+
+  /** Removes the script added by {@link #initializeSyntheticCodeInput} */
+  abstract void removeSyntheticCodeInput();
+
+  /**
+   * Merges all code in the script added by {@link #initializeSyntheticCodeInput} into the first
+   * non-synthetic script. Will crash if the first non-synthetic script is a module and module
+   * rewriting has not occurred.
+   */
+  abstract void mergeSyntheticCodeInput();
 }

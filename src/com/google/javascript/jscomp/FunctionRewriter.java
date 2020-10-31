@@ -45,7 +45,6 @@ import java.util.List;
  * computed accesses, which causes JS engines to use dictionary lookups.
  * Because of this perf regression, this pass is off by default in advanced
  * mode even though it improves code size.
- *
  */
 class FunctionRewriter implements CompilerPass {
   private final AbstractCompiler compiler;
@@ -524,8 +523,7 @@ class FunctionRewriter implements CompilerPass {
         Node rhs = assign.getLastChild();
         if (rhs.isName() &&
             rhs.getString().equals(paramNode.getString())) {
-          Node propertyName = lhs.getLastChild();
-          return propertyName;
+          return lhs.getLastChild();
         }
       }
       return null;

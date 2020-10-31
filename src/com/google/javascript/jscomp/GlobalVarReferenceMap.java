@@ -18,6 +18,8 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.lang.Math.max;
+import static java.lang.Math.min;
 
 import com.google.javascript.rhino.InputId;
 import com.google.javascript.rhino.Node;
@@ -35,8 +37,6 @@ import java.util.Map.Entry;
  * update of reference map for a specific script.
  *
  * @see ReferenceCollectingCallback#exitScope(NodeTraversal)
- *
- * @author bashir@google.com (Bashir Sadjad)
  */
 class GlobalVarReferenceMap implements ReferenceMap {
 
@@ -191,8 +191,8 @@ class GlobalVarReferenceMap implements ReferenceMap {
 
     SourceRefRange(List<Reference> refList, int lastBefore,
         int firstAfter) {
-      this.lastBefore = Math.max(lastBefore, -1);
-      this.firstAfter = Math.min(firstAfter, refList.size());
+      this.lastBefore = max(lastBefore, -1);
+      this.firstAfter = min(firstAfter, refList.size());
       this.refList = refList;
     }
 
@@ -231,8 +231,6 @@ class GlobalVarReferenceMap implements ReferenceMap {
    * A CleanupPass implementation that will replace references to old Syntactic
    * Global Scopes generated in previous compile runs with references to the
    * Global Typed Scope.
-   *
-   * @author tylerg@google.com (Tyler Goodwin)
    */
   static class GlobalVarRefCleanupPass implements HotSwapCompilerPass {
 

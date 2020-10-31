@@ -68,7 +68,6 @@ public abstract class BaseReplaceScriptTestCase {
   protected CompilerOptions getOptions(DiagnosticGroup... typesOfGuard) {
     CompilerOptions options = new CompilerOptions();
     options.setLanguageIn(LanguageMode.ECMASCRIPT3);
-    options.declaredGlobalExternsOnWindow = false;
     options.setClosurePass(true);
     // These are the options that are always on in JsDev which is the only
     // use-case for replaceScript currently.
@@ -208,6 +207,6 @@ public abstract class BaseReplaceScriptTestCase {
 
   protected void assertErrorType(JSError e, DiagnosticType type, int lineNumber) {
     assertError(e).hasType(type);
-    assertThat(lineNumber).isEqualTo(e.lineNumber);
+    assertThat(lineNumber).isEqualTo(e.getLineNumber());
   }
 }

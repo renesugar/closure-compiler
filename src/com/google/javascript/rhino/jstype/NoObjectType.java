@@ -46,17 +46,15 @@ import com.google.javascript.rhino.Node;
 /**
  * The bottom Object type, representing the subclass of all objects.
  *
- * Although JavaScript programmers can't explicitly denote the bottom
- * Object type, it comes up in static analysis. For example, if we have:
- * <code>
+ * <p>Although JavaScript programmers can't explicitly denote the bottom Object type, it comes up in
+ * static analysis. For example, if we have: <code>
  * var x = function() {};
  * if (x instanceof Array) {
  *   f(x);
  * }
- * </code>
- * We need to be able to assign {@code x} a type within the {@code f(x)}
- * call. It has no possible type, but {@code x} would not be legal if f
- * expected a string. So we assign it the {@code NoObjectType}.
+ * </code> We need to be able to assign {@code x} a type within the {@code f(x)} call. It has no
+ * possible type, but {@code x} would not be legal if f expected a string. So we assign it the
+ * {@code NoObjectType}.
  *
  * @see <a href="http://en.wikipedia.org/wiki/Bottom_type">Bottom types</a>
  */
@@ -65,32 +63,16 @@ public class NoObjectType extends FunctionType {
 
   NoObjectType(JSTypeRegistry registry) {
     super(
-        registry,
-        /* name= */ null,
-        /* source= */ null,
-        registry.createArrowType(null, null),
-        /* typeOfThis= */ null,
-        /* templateTypeMap= */ null,
-        FunctionType.Kind.CONSTRUCTOR,
-        /* nativeType= */ true,
-        /* isAbstract= */ false);
-    getInternalArrowType().returnType = this;
-    this.setInstanceType(this);
+        FunctionType.builder(registry)
+            .withKind(FunctionType.Kind.NONE)
+            .withReturnsOwnInstanceType()
+            .forNativeType());
+    this.eagerlyResolveToSelf();
   }
 
   @Override
-  public boolean isSubtype(JSType that) {
-    return isSubtype(that, ImplCache.create(), SubtypingMode.NORMAL);
-  }
-
-  @Override
-  protected boolean isSubtype(JSType that,
-      ImplCache implicitImplCache, SubtypingMode subtypingMode) {
-    if (JSType.isSubtypeHelper(this, that, implicitImplCache, subtypingMode)) {
-      return true;
-    } else {
-      return that.isObject() && !that.isNoType() && !that.isNoResolvedType();
-    }
+  JSTypeClass getTypeClass() {
+    return JSTypeClass.NO_OBJECT;
   }
 
   @Override
@@ -101,11 +83,6 @@ public class NoObjectType extends FunctionType {
   @Override
   public boolean isNoObjectType() {
     return true;
-  }
-
-  @Override
-  public final boolean isConstructor() {
-    return false;
   }
 
   @Override
@@ -169,8 +146,8 @@ public class NoObjectType extends FunctionType {
   }
 
   @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return sb.append(forAnnotations ? "?" : "NoObject");
+  void appendTo(TypeStringBuilder sb) {
+    sb.append(sb.isForAnnotations() ? "?" : "NoObject");
   }
 
   @Override
@@ -180,6 +157,6 @@ public class NoObjectType extends FunctionType {
 
   @Override
   final JSType resolveInternal(ErrorReporter reporter) {
-    return this;
+    throw new AssertionError();
   }
 }

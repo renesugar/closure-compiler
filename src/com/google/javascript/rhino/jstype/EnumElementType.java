@@ -39,7 +39,6 @@
 
 package com.google.javascript.rhino.jstype;
 
-
 import com.google.javascript.rhino.ErrorReporter;
 import com.google.javascript.rhino.Node;
 
@@ -49,6 +48,8 @@ import com.google.javascript.rhino.Node;
  */
 public class EnumElementType extends ObjectType {
   private static final long serialVersionUID = 1L;
+
+  private static final JSTypeClass TYPE_CLASS = JSTypeClass.ENUM_ELEMENT;
 
   /**
    * The primitive type this enum element type wraps. For instance, in
@@ -72,6 +73,13 @@ public class EnumElementType extends ObjectType {
     this.primitiveObjectType = elementType.toObjectType();
     this.name = name;
     this.enumType = enumType;
+
+    registry.getResolver().resolveIfClosed(this, TYPE_CLASS);
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return TYPE_CLASS;
   }
 
   public EnumType getEnumType() {
@@ -143,16 +151,25 @@ public class EnumElementType extends ObjectType {
 
   @Override
   int recursionUnsafeHashCode() {
+    if (!this.hasReferenceName()) {
+      /**
+       * TODO(nickreid): Apparently this can happen if the l-value the enum is assinged to is not a
+       * qname. Fortunatly, this whole thing should become redundant once equality cannot be checked
+       * before resolution.
+       */
+      return 2;
+    }
     return NamedType.nominalHashCode(this);
   }
 
   @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    if (forAnnotations) {
+  void appendTo(TypeStringBuilder sb) {
+    if (sb.isForAnnotations()) {
       // TODO(dimvar): this should use getReferenceName() instead of this.primitiveType
-      return sb.append(this.primitiveType);
+      sb.append(this.primitiveType);
+    } else {
+      sb.append(getReferenceName()).append("<").append(this.primitiveType).append(">");
     }
-    return sb.append(getReferenceName()).append("<").append(this.primitiveType).append(">");
   }
 
   @Override
@@ -161,26 +178,12 @@ public class EnumElementType extends ObjectType {
   }
 
   @Override
-  public boolean isSubtype(JSType that) {
-    return isSubtype(that, ImplCache.create(), SubtypingMode.NORMAL);
-  }
-
-  @Override
-  protected boolean isSubtype(JSType that,
-      ImplCache implicitImplCache, SubtypingMode subtypingMode) {
-    if (JSType.isSubtypeHelper(this, that, implicitImplCache, subtypingMode)) {
-      return true;
-    } else {
-      return primitiveType.isSubtype(that, implicitImplCache, subtypingMode);
-    }
-  }
-
-  @Override
   public <T> T visit(Visitor<T> visitor) {
     return visitor.caseEnumElementType(this);
   }
 
-  @Override <T> T visit(RelationshipVisitor<T> visitor, JSType that) {
+  @Override
+  <T> T visit(RelationshipVisitor<T> visitor, JSType that) {
     return visitor.caseEnumElementType(this, that);
   }
 
@@ -203,8 +206,8 @@ public class EnumElementType extends ObjectType {
 
   @Override
   public FunctionType getConstructor() {
-    return primitiveObjectType == null ?
-        null : primitiveObjectType.getConstructor();
+    // TODO(b/147236174): This should always return null.
+    return primitiveObjectType == null ? null : primitiveObjectType.getConstructor();
   }
 
   @Override
@@ -220,27 +223,29 @@ public class EnumElementType extends ObjectType {
   }
 
   /**
-   * Returns the infimum of a enum element type and another type, or null
-   * if the infimum is empty.
+   * Returns the infimum of a enum element type and another type, or null if the infimum is empty.
    *
-   * This can be a little bit weird. For example, suppose you have an enum
-   * of {(string|number)}, and you want the greatest subtype of the enum
-   * and a {number}.
+   * <p>This can be a little bit weird. For example, suppose you have an enum of {(string|number)},
+   * and you want the greatest subtype of the enum and a {number}.
    *
-   * The infimum is non-empty. But at the same time, we don't really have
-   * a name for this infimum. It's equivalent to "elements of this enum that
-   * are numbers".
+   * <p>The infimum is non-empty. But at the same time, we don't really have a name for this
+   * infimum. It's equivalent to "elements of this enum that are numbers".
    *
-   * The best we can do is make up a new type. This is similar to what
-   * we do in UnionType#meet, which kind-of-sort-of makes sense, because
-   * an EnumElementType is a union of instances of a type.
+   * <p>The best we can do is make up a new type. This is similar to what we do in UnionType#meet,
+   * which kind-of-sort-of makes sense, because an EnumElementType is a union of instances of a
+   * type.
    */
-  JSType meet(JSType that) {
-    JSType meetPrimitive = primitiveType.getGreatestSubtype(that);
+  static JSType getGreatestSubtype(EnumElementType element, JSType that) {
+    // This method is implemented as a static because we don't want polymorphism. Ideally all the
+    // `greatestSubtype` code would be in one place. Until then, using static calls minimizes
+    // confusion.
+
+    JSType meetPrimitive = element.primitiveType.getGreatestSubtype(that);
     if (meetPrimitive.isEmptyType()) {
       return null;
     } else {
-      return new EnumElementType(registry, meetPrimitive, name, getEnumType());
+      return new EnumElementType(
+          element.registry, meetPrimitive, element.name, element.getEnumType());
     }
   }
 

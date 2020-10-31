@@ -15,38 +15,48 @@
  */
 package com.google.javascript.refactoring;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static com.google.javascript.jscomp.CheckLevel.ERROR;
 import static com.google.javascript.jscomp.CheckLevel.OFF;
 import static com.google.javascript.jscomp.CheckLevel.WARNING;
+import static com.google.javascript.jscomp.parsing.Config.JsDocParsing.INCLUDE_ALL_COMMENTS;
 
+import com.google.auto.value.AutoValue;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.javascript.jscomp.Compiler;
 import com.google.javascript.jscomp.CompilerOptions;
 import com.google.javascript.jscomp.DiagnosticGroups;
+import com.google.javascript.jscomp.GoogleCodingConvention;
 import com.google.javascript.jscomp.JSError;
 import com.google.javascript.jscomp.SourceFile;
 import java.util.Collection;
+import javax.annotation.Nullable;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Test case for {@link ErrorToFixMapper}.
- */
+// TODO(tjgq): Re-enable the disabled tests once CheckRequiresAndProvidesSorted is updated to use
+// RequiresFixer. Currently, CheckRequiresAndProvidesSorted and ErrorToFixMapper sometimes disagree
+// on whether a fix is required, which causes no fix to be suggested when it should.
 
+/** Test case for {@link ErrorToFixMapper}. */
 @RunWith(JUnit4.class)
 public class ErrorToFixMapperTest {
   private FixingErrorManager errorManager;
   private CompilerOptions options;
   private Compiler compiler;
+  private String preexistingCode;
 
   @Before
   public void setUp() {
     errorManager = new FixingErrorManager();
     compiler = new Compiler(errorManager);
+    preexistingCode = "";
     compiler.disableThreads();
     errorManager.setCompiler(compiler);
 
@@ -55,8 +65,86 @@ public class ErrorToFixMapperTest {
     options.setWarningLevel(DiagnosticGroups.CHECK_VARIABLES, ERROR);
     options.setWarningLevel(DiagnosticGroups.DEBUGGER_STATEMENT_PRESENT, ERROR);
     options.setWarningLevel(DiagnosticGroups.LINT_CHECKS, WARNING);
-    options.setWarningLevel(DiagnosticGroups.STRICT_MISSING_REQUIRE, ERROR);
+    options.setWarningLevel(DiagnosticGroups.STRICTER_MISSING_REQUIRE, ERROR);
     options.setWarningLevel(DiagnosticGroups.EXTRA_REQUIRE, ERROR);
+    options.setWarningLevel(DiagnosticGroups.STRICT_MODULE_CHECKS, WARNING);
+    options.setCodingConvention(new GoogleCodingConvention());
+  }
+
+  @AutoValue
+  abstract static class ExpectedFix {
+    /** Optional string describing the fix. */
+    @Nullable
+    abstract String description();
+    /** What the code should look like after applying the fix. */
+    abstract String fixedCode();
+
+    static Builder builder() {
+      return new AutoValue_ErrorToFixMapperTest_ExpectedFix.Builder();
+    }
+
+    @AutoValue.Builder
+    abstract static class Builder {
+      abstract Builder description(@Nullable String description);
+
+      abstract Builder fixedCode(String fixedCode);
+
+      abstract ExpectedFix build();
+    }
+  }
+
+  @Test
+  public void testMissingSuperCall() {
+    assertExpectedFixes(
+        lines(
+            "class C {",
+            "}",
+            "class D extends C {",
+            "  constructor() {", // Must have a super call here.
+            "  }",
+            "}",
+            ""),
+        ExpectedFix.builder()
+            .fixedCode(
+                lines(
+                    "class C {",
+                    "}",
+                    "class D extends C {",
+                    "  constructor() {",
+                    "super();",
+                    "  }",
+                    "}",
+                    ""))
+            .build());
+  }
+
+  @Test
+  public void testInvalidSuperCall() {
+    assertExpectedFixes(
+        lines(
+            "class C {", //
+            "  method() {}",
+            "}",
+            "class D extends C {",
+            "  method() {",
+            "    return super();", // super() constructor call invalid here
+            "  }",
+            "}",
+            ""),
+        ExpectedFix.builder()
+            .description("Call 'super.method' instead")
+            .fixedCode(
+                lines(
+                    "class C {", //
+                    "  method() {}",
+                    "}",
+                    "class D extends C {",
+                    "  method() {",
+                    "    return super.method();",
+                    "  }",
+                    "}",
+                    ""))
+            .build());
   }
 
   @Test
@@ -71,22 +159,39 @@ public class ErrorToFixMapperTest {
             "function f() {", //
             "  ",
             "}");
-    assertChanges(code, expectedCode);
+    assertExpectedFixes(
+        code,
+        ExpectedFix.builder()
+            .description("Remove debugger statement")
+            .fixedCode(expectedCode)
+            .build());
   }
 
   @Test
   public void testEmptyStatement1() {
-    assertChanges("var x;;", "var x;");
+    assertExpectedFixes(
+        "var x;;",
+        ExpectedFix.builder().description("Remove empty statement").fixedCode("var x;").build());
   }
 
   @Test
   public void testEmptyStatement2() {
-    assertChanges("var x;;\nvar y;", "var x;\nvar y;");
+    assertExpectedFixes(
+        "var x;;\nvar y;",
+        ExpectedFix.builder()
+            .description("Remove empty statement")
+            .fixedCode("var x;\nvar y;")
+            .build());
   }
 
   @Test
   public void testEmptyStatement3() {
-    assertChanges("function f() {};\nf();", "function f() {}\nf();");
+    assertExpectedFixes(
+        "function f() {};\nf();",
+        ExpectedFix.builder()
+            .description("Remove empty statement")
+            .fixedCode("function f() {}\nf();")
+            .build());
   }
 
   @Test
@@ -153,6 +258,20 @@ public class ErrorToFixMapperTest {
   }
 
   @Test
+  public void testMissingBangOnEnum() {
+    options.setWarningLevel(DiagnosticGroups.LINT_CHECKS, OFF);
+    String prelude = "/** @enum {number} */ var Enum;\n";
+    assertChanges(prelude + "/** @type {Enum} */ var o;", prelude + "/** @type {!Enum} */ var o;");
+  }
+
+  @Test
+  public void testMissingBangOnTypedef() {
+    options.setWarningLevel(DiagnosticGroups.LINT_CHECKS, OFF);
+    String prelude = "/** @typedef {number} */ var Num;\n";
+    assertChanges(prelude + "/** @type {Num} */ var o;", prelude + "/** @type {!Num} */ var o;");
+  }
+
+  @Test
   public void testMissingNullabilityModifier3() {
     options.setWarningLevel(DiagnosticGroups.ANALYZER_CHECKS, OFF);
     String originalCode =
@@ -216,7 +335,12 @@ public class ErrorToFixMapperTest {
   public void testRedeclaration() {
     String code = "function f() { var x; var x; }";
     String expectedCode = "function f() { var x; }";
-    assertChanges(code, expectedCode);
+    assertExpectedFixes(
+        code,
+        ExpectedFix.builder()
+            .description("Remove redundant declaration")
+            .fixedCode(expectedCode)
+            .build());
   }
 
   @Test
@@ -328,7 +452,12 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testRedeclarationOfParam() {
-    assertChanges("function f(x) { var x = 3; }", "function f(x) { x = 3; }");
+    assertExpectedFixes(
+        "function f(x) { var x = 3; }",
+        ExpectedFix.builder()
+            .description("Convert redundant declaration to assignment")
+            .fixedCode("function f(x) { x = 3; }")
+            .build());
   }
 
   @Test
@@ -340,14 +469,24 @@ public class ErrorToFixMapperTest {
   public void testEarlyReference() {
     String code = "if (x < 0) alert(1);\nvar x;";
     String expectedCode = "var x;\n" + code;
-    assertChanges(code, expectedCode);
+    assertExpectedFixes(
+        code,
+        ExpectedFix.builder()
+            .description("Insert var declaration statement")
+            .fixedCode(expectedCode)
+            .build());
   }
 
   @Test
   public void testEarlyReferenceInFunction() {
     String code = "function f() {\n  if (x < 0) alert(1);\nvar x;\n}";
     String expectedCode = "function f() {\n  var x;\nif (x < 0) alert(1);\nvar x;\n}";
-    assertChanges(code, expectedCode);
+    assertExpectedFixes(
+        code,
+        ExpectedFix.builder()
+            .description("Insert var declaration statement")
+            .fixedCode(expectedCode)
+            .build());
   }
 
   @Test
@@ -365,354 +504,785 @@ public class ErrorToFixMapperTest {
   }
 
   @Test
-  public void testRequiresSorted_standalone() {
+  public void testFixProvides_sort() {
     assertChanges(
         lines(
-            "/**",
-            " * @fileoverview",
-            " * @suppress {extraRequire}",
-            " */",
+            "/** @fileoverview foo */",
             "",
-            "",
-            "goog.require('b');",
-            "goog.requireType('a');",
-            "goog.requireType('d');",
-            "goog.require('c');",
-            "",
+            "goog.provide('b');",
+            "goog.provide('a');",
+            "goog.provide('c');",
             "",
             "alert(1);"),
         lines(
-            "/**",
-            " * @fileoverview",
-            " * @suppress {extraRequire}",
-            " */",
+            "/** @fileoverview foo */",
             "",
-            "",
-            "goog.requireType('a');",
-            "goog.require('b');",
-            "goog.require('c');",
-            "goog.requireType('d');",
-            "",
+            "goog.provide('a');",
+            "goog.provide('b');",
+            "goog.provide('c');",
             "",
             "alert(1);"));
   }
 
   @Test
-  public void testRequiresSorted_suppressExtra() {
+  public void testFixProvides_deduplicate() {
     assertChanges(
         lines(
-            "/**",
-            " * @fileoverview",
-            " * @suppress {extraRequire}",
-            " */",
-            "goog.provide('x');",
+            "/** @fileoverview foo */",
             "",
-            "/** @suppress {extraRequire} */",
-            "goog.requireType('c');",
-            "/** @suppress {extraRequire} */",
-            "goog.require('b');",
-            "goog.require('a');",
+            "goog.provide('a');",
+            "goog.provide('b');",
+            "goog.provide('a');",
             "",
             "alert(1);"),
         lines(
-            "/**",
-            " * @fileoverview",
-            " * @suppress {extraRequire}",
-            " */",
-            "goog.provide('x');",
+            "/** @fileoverview foo */",
             "",
-            "goog.require('a');",
-            "/** @suppress {extraRequire} */",
-            "goog.require('b');",
-            "/** @suppress {extraRequire} */",
-            "goog.requireType('c');",
+            "goog.provide('a');",
+            "goog.provide('b');",
             "",
             "alert(1);"));
   }
 
   @Test
-  public void testSortRequiresInGoogModule_let() {
-    assertChanges(
+  public void testFixProvides_alreadySorted() {
+    assertNoChanges(
         lines(
-            "goog.module('m');",
+            "/** @fileoverview foo */",
             "",
-            "/** @suppress {extraRequire} */",
-            "goog.require('a.c');",
-            "/** @suppress {extraRequire} */",
-            "goog.require('a.b');",
+            "goog.provide('a');",
+            "goog.provide('b');",
+            "goog.provide('c');",
             "",
-            "let localVar;"),
-        lines(
-            "goog.module('m');",
-            "",
-            "/** @suppress {extraRequire} */",
-            "goog.require('a.b');",
-            "/** @suppress {extraRequire} */",
-            "goog.require('a.c');",
-            "",
-            "let localVar;"));
+            "alert(1);"));
   }
 
   @Test
-  public void testSortRequiresInGoogModule_const() {
+  public void testFixNonAliasedRequire() {
     assertChanges(
         lines(
+            "/** @fileoverview foo */",
+            "",
             "goog.module('m');",
             "",
-            "/** @suppress {extraRequire} */",
-            "goog.require('a.c');",
-            "/** @suppress {extraRequire} */",
-            "goog.require('a.b');",
-            "",
-            "const FOO = 0;"),
+            "goog.require('x');",
+            useInCode("x")),
         lines(
+            "/** @fileoverview foo */",
+            "",
             "goog.module('m');",
             "",
-            "/** @suppress {extraRequire} */",
-            "goog.require('a.b');",
-            "/** @suppress {extraRequire} */",
-            "goog.require('a.c');",
-            "",
-            "const FOO = 0;"));
-  }
-
-  /**
-   * Using this form in a goog.module is a violation of the style guide, but still fairly common.
-   */
-  @Test
-  public void testSortRequiresInGoogModule_standalone() {
-    assertChanges(
-        lines(
-            "/** @fileoverview @suppress {strictModuleChecks} */",
-            "goog.module('m');",
-            "",
-            "goog.require('a.c');",
-            "goog.require('a.b.d');",
-            "goog.require('a.b.c');",
-            "",
-            "alert(a.c());",
-            "alert(a.b.d());",
-            "alert(a.b.c());"),
-        lines(
-            "/** @fileoverview @suppress {strictModuleChecks} */",
-            "goog.module('m');",
-            "",
-            "goog.require('a.b.c');",
-            "goog.require('a.b.d');",
-            "goog.require('a.c');",
-            "",
-            "alert(a.c());",
-            "alert(a.b.d());",
-            "alert(a.b.c());"));
+            "const x = goog.require('x');",
+            useInCode("x")));
   }
 
   @Test
-  public void testSortRequiresInGoogModule_shorthand() {
+  public void testFixNonAliasedRequireType() {
     assertChanges(
         lines(
+            "/** @fileoverview foo */",
+            "",
             "goog.module('m');",
             "",
-            "var c2 = goog.require('a.c');",
-            "var d = goog.require('a.b.d');",
-            "var c1 = goog.require('a.b.c');",
-            "",
-            "alert(c1());",
-            "alert(d());",
-            "alert(c2());"),
+            "goog.requireType('x');",
+            useInType("x")),
         lines(
+            "/** @fileoverview foo */",
+            "",
             "goog.module('m');",
             "",
-            "var c1 = goog.require('a.b.c');",
-            "var c2 = goog.require('a.c');",
-            "var d = goog.require('a.b.d');",
-            "",
-            "alert(c1());",
-            "alert(d());",
-            "alert(c2());"));
+            "const x = goog.requireType('x');",
+            useInType("x")));
   }
 
   @Test
-  public void testSortRequiresInGoogModule_destructuring() {
+  public void testFixRequires_sortStandaloneOnly() {
     assertChanges(
-        lines(
-            "/** @fileoverview @suppress {extraRequire} */",
-            "goog.module('m');",
-            "",
-            "const {fooBar} = goog.require('x');",
-            "const {foo, bar} = goog.requireType('y');"),
-        lines(
-            "/** @fileoverview @suppress {extraRequire} */",
-            "goog.module('m');",
-            "",
-            "const {foo, bar} = goog.requireType('y');",
-            "const {fooBar} = goog.require('x');"));
-  }
-
-  @Test
-  public void testSortRequiresInGoogModule_shorthandAndStandalone() {
-    assertChanges(
-        lines(
-            "/** @fileoverview @suppress {extraRequire} */",
-            "goog.module('m');",
-            "",
-            "const shorthand2 = goog.requireType('a');",
-            "goog.require('standalone.two');",
-            "goog.requireType('standalone.one');",
-            "const shorthand1 = goog.require('b');"),
-        lines(
-            "/** @fileoverview @suppress {extraRequire} */",
-            "goog.module('m');",
-            "",
-            "const shorthand1 = goog.require('b');",
-            "const shorthand2 = goog.requireType('a');",
-            "goog.requireType('standalone.one');",
-            "goog.require('standalone.two');"));
-  }
-
-  @Test
-  public void testSortRequiresInGoogModule_allThreeStyles() {
-    assertChanges(
-        lines(
-            "/** @fileoverview @suppress {extraRequire} */",
-            "goog.module('m');",
-            "",
-            "const shorthand2 = goog.requireType('a');",
-            "goog.require('standalone.two');",
-            "const {destructuring2} = goog.requireType('c');",
-            "const {destructuring1} = goog.require('d');",
-            "goog.requireType('standalone.one');",
-            "const shorthand1 = goog.require('b');"),
-        lines(
-            "/** @fileoverview @suppress {extraRequire} */",
-            "goog.module('m');",
-            "",
-            "const shorthand1 = goog.require('b');",
-            "const shorthand2 = goog.requireType('a');",
-            "const {destructuring1} = goog.require('d');",
-            "const {destructuring2} = goog.requireType('c');",
-            "goog.requireType('standalone.one');",
-            "goog.require('standalone.two');"));
-  }
-
-  @Test
-  public void testSortRequiresInGoogModule_withFwdDeclare() {
-    assertChanges(
-        lines(
-            "goog.module('x');",
-            "",
-            "const s = goog.require('s');",
-            "const g = goog.forwardDeclare('g');",
-            "const f = goog.forwardDeclare('f');",
-            "const r = goog.require('r');",
-            "",
-            "alert(r, s);"),
-        lines(
-            "goog.module('x');",
-            "",
-            "const r = goog.require('r');",
-            "const s = goog.require('s');",
-            "const f = goog.forwardDeclare('f');",
-            "const g = goog.forwardDeclare('g');",
-            "",
-            "alert(r, s);"));
-  }
-
-  @Test
-  public void testSortRequiresInGoogModule_withOtherStatements() {
-    // The requires after "const {Bar} = bar;" are not sorted.
-    assertChanges(
-        lines(
-            "goog.module('x');",
-            "",
-            "const foo = goog.require('foo');",
-            "const bar = goog.require('bar');",
-            "const {Bar} = bar;",
-            "const util = goog.require('util');",
-            "const type = goog.requireType('type');",
-            "const {doCoolThings} = util;",
-            "",
-            "/** @type {!type} */ let x;",
-            "doCoolThings(foo, Bar);"),
-        lines(
-            "goog.module('x');",
-            "",
-            "const bar = goog.require('bar');",
-            "const foo = goog.require('foo');",
-            "const {Bar} = bar;",
-            "const util = goog.require('util');",
-            "const type = goog.requireType('type');",
-            "const {doCoolThings} = util;",
-            "",
-            "/** @type {!type} */ let x;",
-            "doCoolThings(foo, Bar);"));
-  }
-
-  @Test
-  public void testSortRequiresInGoogModule_veryLongRequire() {
-    assertChanges(
-        lines(
-            "goog.module('m');",
-            "",
-            "const {veryLongDestructuringStatementSoLongThatWeGoPast80CharactersBeforeGettingToTheClosingCurlyBrace} = goog.require('other');",
-            "const {anotherVeryLongDestructuringStatementSoLongThatWeGoPast80CharactersBeforeGettingToTheClosingCurlyBrace} = goog.requireType('type');",
-            "const shorter = goog.require('shorter');",
-            "",
-            "/** @type {!anotherVeryLongDestructuringStatementSoLongThatWeGoPast80CharactersBeforeGettingToTheClosingCurlyBrace} */ var x;",
-            "use(veryLongDestructuringStatementSoLongThatWeGoPast80CharactersBeforeGettingToTheClosingCurlyBrace);",
-            "use(shorter);"),
-        lines(
-            "goog.module('m');",
-            "",
-            "const shorter = goog.require('shorter');",
-            "const {anotherVeryLongDestructuringStatementSoLongThatWeGoPast80CharactersBeforeGettingToTheClosingCurlyBrace} = goog.requireType('type');",
-            "const {veryLongDestructuringStatementSoLongThatWeGoPast80CharactersBeforeGettingToTheClosingCurlyBrace} = goog.require('other');",
-            "",
-            "/** @type {!anotherVeryLongDestructuringStatementSoLongThatWeGoPast80CharactersBeforeGettingToTheClosingCurlyBrace} */ var x;",
-            "use(veryLongDestructuringStatementSoLongThatWeGoPast80CharactersBeforeGettingToTheClosingCurlyBrace);",
-            "use(shorter);"));
-  }
-
-  @Test
-  public void testSortRequiresAndForwardDeclares() {
-    assertChanges(
-        lines(
-            "goog.provide('x');",
-            "",
-            "goog.require('s');",
-            "goog.forwardDeclare('g');",
+        fileWithImports(
+            "goog.require('b');",
+            "goog.requireType('d');",
+            "goog.requireType('c');",
             "goog.forwardDeclare('f');",
-            "goog.require('r');",
-            "",
-            "alert(r, s);"),
-        lines(
-            "goog.provide('x');",
-            "",
-            "goog.require('r');",
-            "goog.require('s');",
+            "goog.require('a');",
+            "goog.forwardDeclare('e');",
+            useInCode("a", "b"),
+            useInType("c", "d", "e", "f")),
+        fileWithImports(
+            "goog.forwardDeclare('e');",
             "goog.forwardDeclare('f');",
-            "goog.forwardDeclare('g');",
-            "",
-            "alert(r, s);"));
+            "goog.require('a');",
+            "goog.require('b');",
+            "goog.requireType('c');",
+            "goog.requireType('d');",
+            useInCode("a", "b"),
+            useInType("c", "d", "e", "f")));
   }
 
   @Test
-  public void testMissingRequireInGoogProvideFile() {
+  public void testFixRequires_sortAllTypes() {
+    assertChanges(
+        fileWithImports(
+            "goog.requireType('a');",
+            "goog.require('b');",
+            "const f = goog.require('f');",
+            "const {d} = goog.require('d');",
+            "const e = goog.requireType('e');",
+            "const {c} = goog.requireType('c');",
+            "goog.forwardDeclare('g');",
+            useInCode("a", "d", "f"),
+            useInType("b", "c", "e", "g")),
+        fileWithImports(
+            "const e = goog.requireType('e');",
+            "const f = goog.require('f');",
+            "const {c} = goog.requireType('c');",
+            "const {d} = goog.require('d');",
+            "goog.forwardDeclare('g');",
+            "goog.require('b');",
+            "goog.requireType('a');",
+            useInCode("a", "d", "f"),
+            useInType("b", "c", "e", "g")));
+  }
+
+  @Test
+  public void testLineCommentDoesNotGetDeleted() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
+    assertChanges(
+        fileWithImports(
+            "goog.require('d');", //
+            "// dummy", //
+            "goog.require('b');", //
+            useInCode("d", "b")), //
+        fileWithImports(
+            "// dummy", //
+            "goog.require('b');", //
+            "goog.require('d');", //
+            useInCode("d", "b")));
+  }
+
+  @Test
+  public void testBlockCommentDoesNotGetDeleted() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
+    assertChanges(
+        fileWithImports(
+            "goog.require('d');", //
+            "/* dummy */", //
+            "goog.require('b');", //
+            useInCode("d", "b")),
+        fileWithImports(
+            "/* dummy */", //
+            "goog.require('b');", //
+            "goog.require('d');", //
+            useInCode("d", "b")));
+  }
+
+  @Test
+  public void testFirstBlockCommentDoesNotGetDeleted() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
+    assertChanges(
+        fileWithImports(
+            "/* dummy */", //
+            "goog.require('d');", //
+            "goog.require('b');", //
+            useInCode("d", "b")),
+        fileWithImports(
+            "goog.require('b');", //
+            "/* dummy */", //
+            "goog.require('d');", //
+            useInCode("d", "b")));
+  }
+
+  @Test
+  public void testIndividualCommentsMoveCorrectly() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
+    assertChanges(
+        fileWithImports(
+            "// dummy 1", //
+            "goog.require('d');", //
+            "// dummy 2", //
+            "goog.require('b');", //
+            useInCode("d", "b")),
+        fileWithImports(
+            "// dummy 2", //
+            "goog.require('b');", //
+            "// dummy 1", //
+            "goog.require('d');", //
+            useInCode("d", "b")));
+  }
+
+  @Test
+  public void testIndividualCommentsMoveCorrectly2() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
+    assertChanges(
+        fileWithImports(
+            "// dummy 1", //
+            "goog.require('d');", //
+            "// dummy 2", //
+            "goog.require('b');", //
+            "// dummy 3",
+            "goog.require('a');",
+            useInCode("d", "b", "a")),
+        fileWithImports(
+            "// dummy 3", //
+            "goog.require('a');",
+            "// dummy 2", //
+            "goog.require('b');", //
+            "// dummy 1", //
+            "goog.require('d');", //
+            useInCode("d", "b", "a")));
+  }
+
+  @Test
+  public void testIndividualCommentsMoveCorrectly3() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
+    assertChanges(
+        fileWithImports(
+            "// dummy 1", //
+            "goog.require('d');", //
+            "// dummy 2", //
+            "goog.require('b');", //
+            "goog.require('a');",
+            useInCode("d", "b", "a")),
+        fileWithImports(
+            "goog.require('a');",
+            "// dummy 2", //
+            "goog.require('b');", //
+            "// dummy 1", //
+            "goog.require('d');", //
+            useInCode("d", "b", "a")));
+  }
+
+  @Test
+  public void testIndividualCommentsMoveCorrectly4() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
+    assertChanges(
+        fileWithImports(
+            "// dummy 1", //
+            "goog.require('d');", //
+            "goog.require('b');", //
+            "goog.require('a');",
+            useInCode("d", "b", "a")),
+        fileWithImports(
+            "goog.require('a');",
+            "goog.require('b');", //
+            "// dummy 1", //
+            "goog.require('d');", //
+            useInCode("d", "b", "a")));
+  }
+
+  @Test
+  public void testMultipleCommentsMoveCorrectly() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
+    assertChanges(
+        fileWithImports(
+            "// dummy 1", //
+            "// dummy 2", //
+            "goog.require('d');", //
+            "goog.require('b');", //
+            "goog.require('a');",
+            useInCode("d", "b", "a")),
+        fileWithImports(
+            "goog.require('a');",
+            "goog.require('b');", //
+            "// dummy 1", //
+            "// dummy 2", //
+            "goog.require('d');", //
+            useInCode("d", "b", "a")));
+  }
+
+  @Test
+  public void testMultipleCommentsMoveCorrectly2() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
+    assertChanges(
+        fileWithImports(
+            "// dummy 1", //
+            "\n", //
+            "// dummy 2", //
+            "goog.require('d');", //
+            "goog.require('b');", //
+            "goog.require('a');",
+            useInCode("d", "b", "a")),
+        fileWithImports(
+            "goog.require('a');",
+            "goog.require('b');", //
+            "// dummy 1", //
+            "\n", //
+            "// dummy 2", //
+            "goog.require('d');", //
+            useInCode("d", "b", "a")));
+  }
+
+  @Test
+  public void testFirstLineCommentDoesNotGetDeleted() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
+    assertChanges(
+        fileWithImports(
+            "// dummy",
+            "goog.require('d');", //
+            "goog.require('b');", //
+            useInCode("d", "b")),
+        fileWithImports(
+            "goog.require('b');", //
+            "// dummy", //
+            "goog.require('d');", //
+            useInCode("d", "b")));
+  }
+
+  @Test
+  public void testBothJSDocAndNonJSDocCommentsTogether() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
+    assertChanges(
+        fileWithImports(
+            "/** JSDoc gets preserved*/",
+            "// dummy",
+            "goog.require('d');", //
+            "goog.require('b');", //
+            useInCode("d", "b")),
+        fileWithImports(
+            "goog.require('b');", //
+            "// dummy",
+            "/** JSDoc gets preserved*/",
+            "goog.require('d');", //
+            useInCode("d", "b")));
+  }
+
+  @Test
+  public void testFileOverviewCommentsPreservedAfterSortingProvides() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
     assertChanges(
         lines(
-            "goog.provide('p');", //
-            "",
-            "alert(new a.b.C());"),
+            "// Copyright 2011 The Closure Library Authors. All Rights Reserved.",
+            "/**",
+            " * @fileoverview Date/time formatting symbols for all locales.",
+            " * @suppress {const} */",
+            "// clang-format off",
+            "goog.provide('goog.i18n.DateTimeSymbols_af');",
+            "goog.provide('goog.i18n.DateTimeSymbols');",
+            "goog.provide('goog.i18n.DateTimeSymbolsType');"),
         lines(
-            "goog.provide('p');", //
-            "goog.require('a.b.C');",
+            "// Copyright 2011 The Closure Library Authors. All Rights Reserved.",
+            "/**",
+            " * @fileoverview Date/time formatting symbols for all locales.",
+            " * @suppress {const} */",
+            "// clang-format off",
+            "goog.provide('goog.i18n.DateTimeSymbols');",
+            "goog.provide('goog.i18n.DateTimeSymbolsType');",
+            "goog.provide('goog.i18n.DateTimeSymbols_af');"));
+  }
+
+  @Test
+  public void testFileOverviewCommentsPreservedAfterSortingProvides2() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
+    assertChanges(
+        lines(
+            "// clang-format off",
+            "/**",
+            " * @fileoverview Date/time formatting symbols for all locales.",
+            " * @suppress {const} */",
+            "goog.provide('goog.i18n.DateTimeSymbols_af');",
+            "goog.provide('goog.i18n.DateTimeSymbols');",
+            "goog.provide('goog.i18n.DateTimeSymbolsType');"),
+        lines(
+            "// clang-format off",
+            "/**",
+            " * @fileoverview Date/time formatting symbols for all locales.",
+            " * @suppress {const} */",
+            "goog.provide('goog.i18n.DateTimeSymbols');",
+            "goog.provide('goog.i18n.DateTimeSymbolsType');",
+            "goog.provide('goog.i18n.DateTimeSymbols_af');"));
+  }
+
+  @Test
+  public void testBothJSDocAndNonJSDocCommentsTogether2() {
+    options.setParseJsDocDocumentation(INCLUDE_ALL_COMMENTS);
+    assertChanges(
+        fileWithImports(
+            "// dummy",
+            "/** JSDoc gets preserved*/",
+            "goog.require('d');", //
+            "goog.require('b');", //
+            useInCode("d", "b")),
+        fileWithImports(
+            "goog.require('b');", //
+            "// dummy",
+            "/** JSDoc gets preserved*/",
+            "goog.require('d');", //
+            useInCode("d", "b")));
+  }
+
+  @Test
+  public void testFixRequires_deduplicate_standalone() {
+    assertChanges(
+        fileWithImports(
+            "goog.require('a');",
+            "goog.require('a');",
+            "goog.require('b');",
+            "goog.requireType('b');",
+            "goog.requireType('c');",
+            "goog.requireType('c');",
+            "goog.forwardDeclare('b');",
+            "goog.forwardDeclare('c');",
+            "goog.forwardDeclare('d');",
+            useInCode("a", "b"),
+            useInType("c", "d")),
+        fileWithImports(
+            "goog.forwardDeclare('d');",
+            "goog.require('a');",
+            "goog.require('b');",
+            "goog.requireType('c');",
+            useInCode("a", "b"),
+            useInType("c", "d")));
+  }
+
+  @Test
+  public void testFixRequires_preserveMultipleAliases() {
+    // a3 changes from goog.requireType to goog.require because we enforce all imports for the same
+    // namespace to have the same strength when rewriting.
+    assertChanges(
+        fileWithImports(
+            "const a3 = goog.requireType('a');",
+            "const a2 = goog.require('a');",
+            "const a1 = goog.require('a');",
+            useInCode("a1", "a2"),
+            useInType("a3")),
+        fileWithImports(
+            "const a1 = goog.require('a');",
+            "const a2 = goog.require('a');",
+            "const a3 = goog.require('a');",
+            useInCode("a1", "a2"),
+            useInType("a3")));
+  }
+
+  @Test
+  public void testFixRequires_mergeDestructuring() {
+    assertChanges(
+        fileWithImports(
+            "const {c, a: a2} = goog.require('a');",
+            "const {b, a: a1} = goog.require('a');",
+            "const {a} = goog.require('a');",
+            "const {} = goog.require('a');",
+            useInCode("a", "a1", "a2", "b", "c")),
+        fileWithImports(
+            "const {a, a: a1, a: a2, b, c} = goog.require('a');",
+            useInCode("a", "a1", "a2", "b", "c")));
+  }
+
+  @Test
+  public void testFixRequires_mergeDestructuring_multiplePrimitives() {
+    assertChanges(
+        fileWithImports(
+            "const {c, a} = goog.require('a');",
+            "const {b, a} = goog.requireType('a');",
+            useInCode("a", "c"),
+            useInType("a", "b")),
+        fileWithImports(
+            "const {a, b, c} = goog.require('a');", useInCode("a", "c"), useInType("a", "b")));
+  }
+
+  @Test
+  public void testFixRequires_nonAliasedRequire() {
+    assertChanges(
+        fileWithImports("goog.require('a');", useInCode("a")),
+        fileWithImports("const a = goog.require('a');", useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_mutlipleFixesSpecifySameRequire() {
+    assertChanges(
+        fileWithImports(
+            "goog.require('a.b');", //
+            useInCode("a.b", "a.b", "a.b")),
+        fileWithImports(
+            "const b = goog.require('a.b');", //
+            useInCode("b", "b", "b")));
+  }
+
+  @Ignore
+  @Test
+  public void testFixRequires_emptyDestructuring_alone() {
+    // It would be nice to dedeuplicate the destructuring require with the aliased require,
+    // but it's not clear that this pattern is common enough to warrant special casing
+    assertChanges(
+        fileWithImports("const {} = goog.require('a');", useInCode("a")),
+        fileWithImports("goog.require('a');", useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_emptyDestructuringStandaloneBySamePrimitive() {
+    assertChanges(
+        fileWithImports("const {} = goog.require('a');", "goog.require('a');", useInCode("a")),
+        fileWithImports("goog.require('a');", useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_emptyDestructuringStandaloneByStrongerPrimitive() {
+    assertChanges(
+        fileWithImports("const {} = goog.requireType('a');", "goog.require('a');", useInCode("a")),
+        fileWithImports("goog.require('a');", useInCode("a")));
+  }
+
+  @Ignore
+  @Test
+  public void testFixRequires_emptyDestructuringStandaloneByWeakerPrimitive() {
+    // It would be nice to dedeuplicate the destructuring require with the aliased require,
+    // but it's not clear that this pattern is common enough to warrant special casing
+    assertChanges(
+        fileWithImports("const {} = goog.require('a');", "goog.requireType('a');", useInCode("a")),
+        fileWithImports("goog.require('a');", useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_emptyDestructuringAliasedBySamePrimitive() {
+    assertChanges(
+        fileWithImports(
+            "const {} = goog.require('a');", "const a = goog.require('a');", useInCode("a")),
+        fileWithImports("const a = goog.require('a');", useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_emptyDestructuringAliasedByStrongerPrimitive() {
+    assertChanges(
+        fileWithImports(
+            "const {} = goog.requireType('a');", "const a = goog.require('a');", useInCode("a")),
+        fileWithImports("const a = goog.require('a');", useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_emptyDestructuringAliasedByWeakerPrimitive() {
+    assertChanges(
+        fileWithImports(
+            "const {} = goog.require('a');", "const a = goog.requireType('a');", useInCode("a")),
+        fileWithImports("const a = goog.require('a');", useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_aliasPreservedWhenDestructuring() {
+    assertNoChanges(
+        fileWithImports(
+            "const a = goog.require('a');",
+            "const b = goog.require('b');",
+            "const {a1, a2} = goog.require('a');",
+            "const {b1, b2} = goog.require('b');",
             "",
-            "alert(new a.b.C());"));
+            useInCode("a1", "a2", "b", "b1", "b2"),
+            useInType("a")));
+  }
+
+  @Test
+  public void attachesInlineJsDocToParam() {
+    assertNoChanges(
+        " class C {\n" + "  inlineJSDocWithDefault(/** boolean= */ isSomething) {}\n" + "}\n");
+  }
+
+  @Test
+  public void attachesInlineJsDocToDefaultParam() {
+    assertNoChanges(
+        " class C {\n"
+            + "  inlineJSDocWithDefault(/** boolean= */ isSomething = true) {}\n"
+            + "}\n");
+  }
+
+  @Test
+  public void testFixRequires_standaloneAliasedBySamePrimitive() {
+    assertChanges(
+        fileWithImports("const a = goog.require('a');", "goog.require('a');", useInCode("a")),
+        fileWithImports("const a = goog.require('a');", useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_standaloneAliasedByStrongerPrimitive() {
+    assertChanges(
+        fileWithImports("const a = goog.require('a');", "goog.requireType('a');", useInCode("a")),
+        fileWithImports("const a = goog.require('a');", useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_standaloneAliasedByWeakerPrimitive() {
+    assertChanges(
+        fileWithImports("const a = goog.requireType('a');", "goog.require('a');", useInCode("a")),
+        fileWithImports("const a = goog.require('a');", useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_standaloneDestructuredBySamePrimitive() {
+    assertChanges(
+        fileWithImports("const {a} = goog.require('a');", "goog.require('a');", useInCode("a")),
+        fileWithImports("const {a} = goog.require('a');", useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_standaloneDestructuredByStrongerPrimitive() {
+    assertChanges(
+        fileWithImports("const {a} = goog.require('a');", "goog.requireType('a');", useInCode("a")),
+        fileWithImports("const {a} = goog.require('a');", useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_standaloneDestructuredByWeakerPrimitive() {
+    assertChanges(
+        fileWithImports("const {a} = goog.requireType('a');", "goog.require('a');", useInCode("a")),
+        fileWithImports("const {a} = goog.require('a');", useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_varAndLetBecomeConstIfUnsorted() {
+    assertChanges(
+        fileWithImports(
+            "var b = goog.require('b');", "let a = goog.require('a');", useInCode("a", "b")),
+        fileWithImports(
+            "const a = goog.require('a');", "const b = goog.require('b');", useInCode("a", "b")));
+  }
+
+  @Test
+  public void testFixRequires_varAndLetDoNotBecomeConstIfAlreadySorted() {
+    // TODO(tjgq): Consider rewriting to const even when already sorted.
+    assertNoChanges(
+        fileWithImports(
+            "let a = goog.require('a');", "var b = goog.require('b');", useInCode("a", "b")));
+  }
+
+  @Test
+  public void testFixRequires_preserveJsDoc_whenSorting() {
+    assertChanges(
+        fileWithImports(
+            "const c = goog.require('c');",
+            "/**",
+            " * @suppress {extraRequire} Because I said so.",
+            " */",
+            "const b = goog.require('b');",
+            "const a = goog.require('a');",
+            useInCode("a", "b", "c")),
+        fileWithImports(
+            "const a = goog.require('a');",
+            "/**",
+            " * @suppress {extraRequire} Because I said so.",
+            " */",
+            "const b = goog.require('b');",
+            "const c = goog.require('c');",
+            useInCode("a", "b", "c")));
+  }
+
+  @Test
+  public void testFixRequires_preserveJsDoc_whenMergingStandalone() {
+    assertChanges(
+        fileWithImports(
+            "/**",
+            " * @suppress {extraRequire} Because I said so.",
+            " */",
+            "goog.require('a');",
+            "goog.requireType('a');",
+            useInCode("a")),
+        fileWithImports(
+            "/**",
+            " * @suppress {extraRequire} Because I said so.",
+            " */",
+            "goog.require('a');",
+            useInCode("a")));
+  }
+
+  @Test
+  public void testFixRequires_preserveJsDoc_whenMergingDestructures_single() {
+    assertChanges(
+        fileWithImports(
+            "/**",
+            " * @suppress {extraRequire} Because I said so.",
+            " */",
+            "const {b} = goog.require('a');",
+            "const {c} = goog.require('a');",
+            useInCode("b", "c")),
+        fileWithImports(
+            "/**",
+            " * @suppress {extraRequire} Because I said so.",
+            " */",
+            "const {b, c} = goog.require('a');",
+            useInCode("b", "c")));
+  }
+
+  @Test
+  public void testFixRequires_preserveJsDoc_whenMergingDestructures_multiple() {
+    // TODO(tjgq): Consider merging multiple @suppress annotations into a single comment.
+    assertChanges(
+        fileWithImports(
+            "/**",
+            " * @suppress {extraRequire} Because I said so.",
+            " */",
+            "const {b} = goog.require('a');",
+            "/**",
+            " * @suppress {extraRequire} Because I rule.",
+            " */",
+            "const {c} = goog.require('a');",
+            useInCode("b", "c")),
+        fileWithImports(
+            "/**",
+            " * @suppress {extraRequire} Because I said so.",
+            " */",
+            "/**",
+            " * @suppress {extraRequire} Because I rule.",
+            " */",
+            "const {b, c} = goog.require('a');",
+            useInCode("b", "c")));
+  }
+
+  @Test
+  public void testFixRequires_veryLongNames() {
+    assertNoChanges(
+        fileWithImports(
+            "const"
+                + " veryLongIdentifierSoLongThatItGoesPastThe80CharactersLimitAndYetWeShouldNotLineBreak"
+                + " = goog.require('b');",
+            "const"
+                + " {anotherVeryLongIdentifierSoLongThatItGoesPastThe80CharactersLimitAndYetWeShouldNotLineBreak}"
+                + " = goog.require('a');",
+            "",
+            useInCode(
+                "veryLongIdentifierSoLongThatItGoesPastThe80CharactersLimitAndYetWeShouldNotLineBreak",
+                "anotherVeryLongIdentifierSoLongThatItGoesPastThe80CharactersLimitAndYetWeShouldNotLineBreak")));
+  }
+
+  @Test
+  public void testFixRequires_veryLongNames_whenMergingDestructures() {
+    assertChanges(
+        fileWithImports(
+            "const {veryLongSymbolThatMapsTo: veryLongLocalNameForIt} = goog.require('a');",
+            "const {anotherVeryLongSymbolThatMapsTo: veryLongLocalNameForItAlso} ="
+                + " goog.require('a');",
+            useInCode("veryLongLocalNameForIt", "veryLongLocalNameForItAlso")),
+        fileWithImports(
+            "const {anotherVeryLongSymbolThatMapsTo: veryLongLocalNameForItAlso,"
+                + " veryLongSymbolThatMapsTo: veryLongLocalNameForIt} = goog.require('a');",
+            useInCode("veryLongLocalNameForIt", "veryLongLocalNameForItAlso")));
+  }
+
+  @Test
+  public void testFixRequires_noRequires() {
+    assertNoChanges(fileWithImports());
+  }
+
+  @Test
+  public void testMissingRequire_inJSDoc_withWhitespace() {
+    preexistingCode = "goog.provide('some.really.very.long.namespace.SuperInt');";
+    assertExpectedFixes(
+        lines(
+            "goog.module('m');",
+            "",
+            "/** @interface @implements {some.really.very.long.",
+            "                            namespace.SuperInt} */",
+            "class Bar {}"),
+        ExpectedFix.builder()
+            .fixedCode(
+                lines(
+                    "goog.module('m');",
+                    "const SuperInt = goog.require('some.really.very.long.namespace.SuperInt');",
+                    "",
+                    "/** @interface @implements {SuperInt} */",
+                    "class Bar {}"))
+            .build());
   }
 
   @Test
   public void testMissingRequire_unsorted1() {
     // Both the fix for requires being unsorted, and the fix for the missing require, are applied.
     // However, the end result is still out of order.
+    preexistingCode = "goog.provide('goog.dom.DomHelper');";
     assertChanges(
         lines(
             "goog.module('module');",
@@ -739,6 +1309,7 @@ public class ErrorToFixMapperTest {
   public void testMissingRequire_unsorted2() {
     // Both the fix for requires being unsorted, and the fix for the missing require, are applied.
     // The end result is ordered.
+    preexistingCode = "goog.provide('goog.rays.Xray');";
     assertChanges(
         lines(
             "goog.module('module');",
@@ -763,6 +1334,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testMissingRequireInGoogModule() {
+    preexistingCode = "goog.provide('a.b.C');";
     assertChanges(
         lines(
             "goog.module('m');", //
@@ -777,6 +1349,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testMissingRequireInGoogModuleTwice() {
+    preexistingCode = "goog.provide('a.b.C');";
     assertChanges(
         lines(
             "goog.module('m');", //
@@ -787,13 +1360,13 @@ public class ErrorToFixMapperTest {
             "goog.module('m');",
             "const C = goog.require('a.b.C');",
             "",
-            // TODO(tbreisacher): Can we make automatically switch both lines to use 'new C()'?
-            "alert(new a.b.C());",
+            "alert(new C());",
             "alert(new C());"));
   }
 
   @Test
   public void testMissingRequireInGoogModule_call() {
+    preexistingCode = "goog.provide('a.b');";
     assertChanges(
         lines(
             "goog.module('m');", //
@@ -808,6 +1381,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testMissingRequireInGoogModule_extends() {
+    preexistingCode = "goog.provide('world.util.Animal');";
     assertChanges(
         lines(
             "goog.module('m');", //
@@ -822,6 +1396,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testMissingRequireInGoogModule_atExtends() {
+    preexistingCode = "goog.provide('world.util.Animal');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -832,38 +1407,23 @@ public class ErrorToFixMapperTest {
             "goog.module('m');",
             "const Animal = goog.require('world.util.Animal');",
             "",
-            // TODO(tbreisacher): Change this to "@extends {Animal}"
-            "/** @constructor @extends {world.util.Animal} */",
+            "/** @constructor @extends {Animal} */",
             "function Cat() {}"));
   }
 
   @Test
-  public void testBothFormsOfRequire() {
+  public void testMissingRequire_inProvidesFile() {
+    preexistingCode = "goog.provide('world.util.Animal');";
     assertChanges(
+        lines("var f = world.util.Animal.create();"),
         lines(
-            "goog.module('example');",
-            "",
-            "goog.require('foo.bar.SoyRenderer');",
-            "const SoyRenderer = goog.require('foo.bar.SoyRenderer');",
-            "",
-            "function setUp() {",
-            "  const soyService = new foo.bar.SoyRenderer();",
-            "}",
-            ""),
-        lines(
-            "goog.module('example');",
-            "",
-            "const SoyRenderer = goog.require('foo.bar.SoyRenderer');",
-            "goog.require('foo.bar.SoyRenderer');",
-            "",
-            "function setUp() {",
-            "  const soyService = new SoyRenderer();",
-            "}",
-            ""));
+            "goog.require('world.util.Animal');", //
+            "var f = world.util.Animal.create();"));
   }
 
   @Test
   public void testStandaloneVarDoesntCrashMissingRequire() {
+    preexistingCode = "goog.provide('goog.Animal');";
     assertChanges(
         lines(
             "goog.module('m');", //
@@ -882,6 +1442,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testAddLhsToGoogRequire() {
+    preexistingCode = "goog.provide('world.util.Animal');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -898,7 +1459,52 @@ public class ErrorToFixMapperTest {
   }
 
   @Test
+  public void testAddLhsToGoogRequire_conflictingName() {
+    preexistingCode = "goog.provide('world.util.Animal');";
+    assertChanges(
+        lines(
+            "goog.module('m');",
+            "",
+            "goog.require('world.util.Animal');",
+            "",
+            "const Animal = null;",
+            "",
+            "class Cat extends world.util.Animal {}"),
+        lines(
+            "goog.module('m');",
+            "",
+            "const UtilAnimal = goog.require('world.util.Animal');",
+            "",
+            "const Animal = null;",
+            "",
+            "class Cat extends UtilAnimal {}"));
+  }
+
+  @Test
+  public void testAddLhsToGoogRequire_conflictingName_fromOtherSuggestion() {
+    preexistingCode = "goog.provide('world.util.Animal'); goog.provide('rara.exotic.Animal');";
+    assertChanges(
+        lines(
+            "goog.module('m');",
+            "",
+            "goog.require('rare.exotic.Animal');",
+            "goog.require('world.util.Animal');",
+            "",
+            "/** @implements {rare.exotic.Animal} */",
+            "class Cat extends world.util.Animal {}"),
+        lines(
+            "goog.module('m');",
+            "",
+            "const ExoticAnimal = goog.require('rare.exotic.Animal');",
+            "const Animal = goog.require('world.util.Animal');",
+            "",
+            "/** @implements {ExoticAnimal} */",
+            "class Cat extends Animal {}"));
+  }
+
+  @Test
   public void testAddLhsToGoogRequire_new() {
+    preexistingCode = "goog.provide('world.util.Animal');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -916,6 +1522,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testAddLhsToGoogRequire_getprop() {
+    preexistingCode = "goog.provide('magical.factories'); goog.provide('world.util.Animal');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -935,20 +1542,27 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testAddLhsToGoogRequire_jsdoc() {
-    // TODO(tbreisacher): Add "const Animal = " before the goog.require and change
-    // world.util.Animal to Animal
-    assertNoChanges(
+    preexistingCode = "goog.provide('world.util.Animal');";
+    assertChanges(
         lines(
             "goog.module('m');",
             "",
             "goog.require('world.util.Animal');",
             "",
             "/** @type {!world.util.Animal} */",
+            "var cat;"),
+        lines(
+            "goog.module('m');",
+            "",
+            "const Animal = goog.require('world.util.Animal');",
+            "",
+            "/** @type {!Animal} */",
             "var cat;"));
   }
 
   @Test
   public void testSwitchToShorthand_JSDoc1() {
+    preexistingCode = "goog.provide('world.util.Animal');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -966,6 +1580,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testSwitchToShorthand_JSDoc2() {
+    preexistingCode = "goog.provide('world.util.Animal');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -983,6 +1598,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testSwitchToShorthand_JSDoc3() {
+    preexistingCode = "goog.provide('world.util.Animal');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -1000,6 +1616,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testSwitchToShorthand_JSDoc4() {
+    preexistingCode = "goog.provide('world.util.Animal');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -1017,6 +1634,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testSwitchToShorthand_JSDoc5() {
+    preexistingCode = "goog.provide('world.util.Animal');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -1034,6 +1652,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testSwitchToShorthand_JSDoc6() {
+    preexistingCode = "goog.provide('world.util.Animal');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -1051,6 +1670,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testSwitchToShorthand_JSDoc7() {
+    preexistingCode = "goog.provide('world.util.Animal');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -1068,6 +1688,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testMissingRequireInGoogModule_atExtends_qname() {
+    preexistingCode = "goog.provide('world.util.Animal');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -1078,13 +1699,30 @@ public class ErrorToFixMapperTest {
             "goog.module('m');",
             "const Animal = goog.require('world.util.Animal');",
             "",
-            // TODO(tbreisacher): Change this to "@extends {Animal}"
-            "/** @constructor @extends {world.util.Animal} */",
+            "/** @constructor @extends {Animal} */",
             "world.util.Cat = function() {};"));
   }
 
   @Test
+  public void testMissingRequireTypeInGoogModule_atType_qname() {
+    preexistingCode = "goog.provide('world.util.Animal');";
+    assertChanges(
+        lines(
+            "goog.module('m');", //
+            "",
+            "/** @type {?world.util.Animal} */",
+            "let x = null;"),
+        lines(
+            "goog.module('m');",
+            "const Animal = goog.requireType('world.util.Animal');",
+            "",
+            "/** @type {?Animal} */",
+            "let x = null;"));
+  }
+
+  @Test
   public void testMissingRequireInGoogModule_googString() {
+    preexistingCode = "goog.provide('goog.string');";
     assertChanges(
         lines(
             "goog.module('m');", //
@@ -1099,6 +1737,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testMissingRequireInGoogModule_googStructsMap() {
+    preexistingCode = "goog.provide('goog.structs.Map');";
     assertChanges(
         lines(
             "goog.module('m');", //
@@ -1113,6 +1752,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testMissingRequireInGoogModule_insertedInCorrectOrder() {
+    preexistingCode = "goog.provide('x.B');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -1134,6 +1774,7 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testMissingRequireInGoogModule_alwaysInsertsConst() {
+    preexistingCode = "goog.provide('x.B');";
     assertChanges(
         lines(
             "goog.module('m');",
@@ -1150,49 +1791,6 @@ public class ErrorToFixMapperTest {
             "var C = goog.require('c.C');",
             "",
             "alert(new A(new B(new C())));"));
-  }
-
-  @Test
-  public void testSortShorthandRequiresInGoogModule() {
-    assertChanges(
-        lines(
-            "goog.module('m');",
-            "",
-            "var B = goog.require('x.B');",
-            "var A = goog.require('a.A');",
-            "var C = goog.require('c.C');",
-            "",
-            "alert(new A(new B(new C())));"),
-        lines(
-            "goog.module('m');",
-            "",
-            // Requires are sorted by the short name, not the full namespace.
-            "var A = goog.require('a.A');",
-            "var B = goog.require('x.B');",
-            "var C = goog.require('c.C');",
-            "",
-            "alert(new A(new B(new C())));"));
-  }
-
-  @Test
-  public void testUnsortedAndMissingLhs() {
-    assertChanges(
-        lines(
-            "goog.module('foo');",
-            "",
-            "goog.require('example.controller');",
-            "const Bar = goog.require('example.Bar');",
-            "",
-            "alert(example.controller.SOME_CONSTANT);",
-            "alert(Bar.doThings);"),
-        lines(
-            "goog.module('foo');",
-            "",
-            "const Bar = goog.require('example.Bar');",
-            "goog.require('example.controller');",
-            "",
-            "alert(example.controller.SOME_CONSTANT);",
-            "alert(Bar.doThings);"));
   }
 
   @Test
@@ -1355,39 +1953,21 @@ public class ErrorToFixMapperTest {
   }
 
   @Test
-  public void testProvidesSorted1() {
-    assertChanges(
-        lines(
-            "/** @fileoverview foo */",
-            "",
-            "",
-            "goog.provide('b');",
-            "goog.provide('a');",
-            "goog.provide('c');",
-            "",
-            "",
-            "alert(1);"),
-        lines(
-            "/** @fileoverview foo */",
-            "",
-            "",
-            "goog.provide('a');",
-            "goog.provide('b');",
-            "goog.provide('c');",
-            "",
-            "",
-            "alert(1);"));
-  }
-
-  @Test
   public void testExtraRequire() {
-    assertChanges(
+    assertExpectedFixes(
         lines(
             "goog.require('goog.object');",
             "goog.require('goog.string');",
             "",
             "alert(goog.string.parseInt('7'));"),
-        lines("goog.require('goog.string');", "", "alert(goog.string.parseInt('7'));"));
+        ExpectedFix.builder()
+            .description("Delete extra require")
+            .fixedCode(
+                lines(
+                    "goog.require('goog.string');", //
+                    "",
+                    "alert(goog.string.parseInt('7'));"))
+            .build());
   }
 
   @Test
@@ -1516,19 +2096,23 @@ public class ErrorToFixMapperTest {
 
   @Test
   public void testExtraRequire_destructuring_unusedShortnameMember() {
-    assertChanges(
+    assertExpectedFixes(
         lines(
             "goog.module('x');",
             "",
-            "const {foo: googUtilFoo, bar} = goog.require('goog.util');",
+            "const {bar, foo: googUtilFoo} = goog.require('goog.util');",
             "",
             "alert(bar(7));"),
-        lines(
-            "goog.module('x');",
-            "",
-            "const {bar} = goog.require('goog.util');",
-            "",
-            "alert(bar(7));"));
+        ExpectedFix.builder()
+            .description("Delete unused symbol")
+            .fixedCode(
+                lines(
+                    "goog.module('x');",
+                    "",
+                    "const {bar} = goog.require('goog.util');",
+                    "",
+                    "alert(bar(7));"))
+            .build());
   }
 
   @Test
@@ -1613,44 +2197,133 @@ public class ErrorToFixMapperTest {
             "alert(goog.dom.createElement('div'));"));
   }
 
-  private void assertChanges(String originalCode, String expectedCode) {
+  // TODO(tjgq): Make this not crash on ClosureRewriteModule#updateGoogRequire.
+  @Ignore
+  @Test
+  public void testNoCrashOnInvalidMultiRequireStatement() {
+    assertNoChanges(
+        fileWithImports(
+            "const a = goog.require('a'), b = goog.require('b');", useInCode("a", "b")));
+  }
+
+  @Test
+  public void testConstantCaseName_let() {
+    assertExpectedFixes(
+        "goog.module('m'); let CONSTANT_CASE = 'value';",
+        ExpectedFix.builder()
+            .description("Make explicitly constant")
+            .fixedCode("goog.module('m'); const CONSTANT_CASE = 'value';")
+            .build());
+  }
+
+  @Test
+  public void testConstantCaseName_var() {
+    assertExpectedFixes(
+        lines(
+            "goog.module('m');", //
+            "var CONSTANT_CASE = 'value';"),
+        ExpectedFix.builder()
+            .description("Make explicitly constant")
+            .fixedCode(
+                lines(
+                    "goog.module('m');", //
+                    "/** @const */",
+                    "var CONSTANT_CASE = 'value';"))
+            .build());
+  }
+
+  @Test
+  public void testConstantCaseName_varWithExistingJSDoc() {
+    assertNoChanges(
+        "goog.module('m'); /** @type {string} Some description */ var CONSTANT_CASE = 'value';");
+  }
+
+  private String fileWithImports(String... imports) {
+    return lines(
+        lines("/*", " * @fileoverview", " */", "goog.module('x');", ""),
+        lines(imports),
+        lines("", "module.exports = function() {};"));
+  }
+
+  private String useInCode(String... names) {
+    StringBuilder sb = new StringBuilder();
+    sb.append("\n");
+    for (String name : names) {
+      sb.append("use(").append(name).append(");\n");
+    }
+    return sb.toString();
+  }
+
+  private String useInType(String... names) {
+    StringBuilder sb = new StringBuilder();
+    sb.append("\n");
+    for (String name : names) {
+      sb.append("/** @type {!").append(name).append("} */ var _").append(name).append(";\n");
+    }
+    return sb.toString();
+  }
+
+  private void compileExpectingAtLeastOneWarningOrError(String originalCode) {
+    compileExpectingAtLeastOneWarningOrError(getInputMap(originalCode));
+  }
+
+  private void compileExpectingAtLeastOneWarningOrError(ImmutableMap<String, String> inputMap) {
+    ImmutableList<SourceFile> inputs =
+        inputMap.entrySet().stream()
+            .map(e -> SourceFile.fromCode(e.getKey(), e.getValue()))
+            .collect(toImmutableList());
     compiler.compile(
         ImmutableList.<SourceFile>of(), // Externs
-        ImmutableList.of(SourceFile.fromCode("test", originalCode)),
+        inputs,
         options);
     ImmutableList<JSError> warningsAndErrors =
         ImmutableList.<JSError>builder()
             .addAll(compiler.getWarnings())
             .addAll(compiler.getErrors())
             .build();
-    assertThat(warningsAndErrors).named("warnings/errors").isNotEmpty();
+    assertWithMessage("warnings/errors").that(warningsAndErrors).isNotEmpty();
+  }
+
+  /** @deprecated Use assertExpectedFixes() for new cases or when amending existing ones */
+  @Deprecated
+  private void assertChanges(String originalCode, String expectedCode) {
+    compileExpectingAtLeastOneWarningOrError(originalCode);
     Collection<SuggestedFix> fixes = errorManager.getAllFixes();
-    assertThat(fixes).named("fixes").isNotEmpty();
+    assertWithMessage("fixes").that(fixes).isNotEmpty();
     String newCode =
-        ApplySuggestedFixes.applySuggestedFixesToCode(fixes, ImmutableMap.of("test", originalCode))
-            .get("test");
+        ApplySuggestedFixes.applySuggestedFixesToCode(fixes, getInputMap(originalCode)).get("test");
     assertThat(newCode).isEqualTo(expectedCode);
   }
 
+  /** @deprecated Use assertExpectedFixes() for new cases or when amending existing ones */
+  @Deprecated
   private void assertChanges(String originalCode, String... expectedFixes) {
-    compiler.compile(
-        ImmutableList.<SourceFile>of(), // Externs
-        ImmutableList.of(SourceFile.fromCode("test", originalCode)),
-        options);
-    ImmutableList<JSError> warningsAndErrors =
-        ImmutableList.<JSError>builder()
-            .addAll(compiler.getWarnings())
-            .addAll(compiler.getErrors())
-            .build();
-    assertThat(warningsAndErrors).named("warnings/errors").isNotEmpty();
+    compileExpectingAtLeastOneWarningOrError(originalCode);
     SuggestedFix[] fixes = errorManager.getAllFixes().toArray(new SuggestedFix[0]);
-    assertThat(fixes).named("fixes").hasLength(expectedFixes.length);
+    assertWithMessage("fixes").that(fixes).hasLength(expectedFixes.length);
     for (int i = 0; i < fixes.length; i++) {
       String newCode =
           ApplySuggestedFixes.applySuggestedFixesToCode(
-                  ImmutableList.of(fixes[i]), ImmutableMap.of("test", originalCode))
+                  ImmutableList.of(fixes[i]), getInputMap(originalCode))
               .get("test");
       assertThat(newCode).isEqualTo(expectedFixes[i]);
+    }
+  }
+
+  private void assertExpectedFixes(String originalCode, ExpectedFix... expectedFixes) {
+    compileExpectingAtLeastOneWarningOrError(originalCode);
+    SuggestedFix[] fixes = errorManager.getAllFixes().toArray(new SuggestedFix[0]);
+    assertWithMessage("Unexpected number of fixes").that(fixes).hasLength(expectedFixes.length);
+    for (int i = 0; i < fixes.length; i++) {
+      ExpectedFix expectedFix = expectedFixes[i];
+      SuggestedFix actualFix = fixes[i];
+      assertWithMessage("Actual fix[" + i + "]: " + actualFix)
+          .that(actualFix.getDescription())
+          .isEqualTo(expectedFix.description());
+      assertThat(
+              ApplySuggestedFixes.applySuggestedFixesToCode(
+                  ImmutableList.of(fixes[i]), getInputMap(originalCode)))
+          .containsEntry("test", expectedFix.fixedCode());
     }
   }
 
@@ -1661,6 +2334,10 @@ public class ErrorToFixMapperTest {
         options);
     Collection<SuggestedFix> fixes = errorManager.getAllFixes();
     assertThat(fixes).isEmpty();
+  }
+
+  private ImmutableMap<String, String> getInputMap(String originalCode) {
+    return ImmutableMap.of("preexistingCode", preexistingCode, "test", originalCode);
   }
 
   private String lines(String... lines) {

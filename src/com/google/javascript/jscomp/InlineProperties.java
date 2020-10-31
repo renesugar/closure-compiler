@@ -38,8 +38,6 @@ import java.util.Map;
  *
  * <p>The current implementation only inlines immutable values (as defined by
  * NodeUtil.isImmutableValue).
- *
- * @author johnlenz@google.com (John Lenz)
  */
 final class InlineProperties implements CompilerPass {
 
@@ -62,16 +60,15 @@ final class InlineProperties implements CompilerPass {
 
   InlineProperties(AbstractCompiler compiler) {
     this.compiler = compiler;
-    this.invalidatingTypes = new InvalidatingTypes.Builder(compiler.getTypeRegistry())
-        // TODO(sdh): consider allowing inlining properties of global this
-        // (we already reserve extern'd names, so this should be safe).
-        .disallowGlobalThis()
-        .addTypesInvalidForPropertyRenaming()
-        // NOTE: Mismatches are less important to this pass than to (dis)ambiguate properties.
-        // This pass doesn't remove values (it only inlines them when the type is known), so
-        // it isn't necessary to invalidate due to implicit interface uses.
-        .addAllTypeMismatches(compiler.getTypeMismatches())
-        .build();
+    this.invalidatingTypes =
+        new InvalidatingTypes.Builder(compiler.getTypeRegistry())
+            // NOTE: Mismatches are less important to this pass than to (dis)ambiguate properties.
+            // This pass doesn't remove values (it only inlines them when the type is known), so
+            // it isn't necessary to invalidate due to implicit interface uses, but we do so anyway
+            // for consistency with the other type-based optimizations.
+            .addAllTypeMismatches(compiler.getTypeMismatches())
+            .addAllTypeMismatches(compiler.getImplicitInterfaceUses())
+            .build();
     invalidateExternProperties();
   }
 
@@ -165,10 +162,8 @@ final class InlineProperties implements CompilerPass {
           && src.getLastChild().getString().equals("prototype")) {
         // This is a prototype assignment like:
         //    x.prototype.foo = 1;
-        JSType instanceType = maybeGetInstanceTypeFromPrototypeRef(src);
-        if (instanceType != null) {
-          return maybeStoreCandidateValue(instanceType, propName, value);
-        }
+        JSType srcType = getJSType(src);
+        return maybeStoreCandidateValue(srcType, propName, value);
       } else if (t.inGlobalHoistScope()) {
         // This is a static assignment like:
         //    x.foo = 1;
@@ -178,15 +173,6 @@ final class InlineProperties implements CompilerPass {
         }
       }
       return false;
-    }
-
-    private JSType maybeGetInstanceTypeFromPrototypeRef(Node src) {
-      JSType ownerType = getJSType(src.getFirstChild());
-      if (ownerType.isConstructor()) {
-        FunctionType functionType = ownerType.toMaybeFunctionType();
-        return functionType.getInstanceType();
-      }
-      return null;
     }
 
     private void invalidateProperty(String propName) {
@@ -240,7 +226,7 @@ final class InlineProperties implements CompilerPass {
             && info != INVALIDATED
             && isMatchingType(target, info.type)) {
           Node replacement = info.value.cloneTree();
-          if (NodeUtil.mayHaveSideEffects(n.getFirstChild(), compiler)) {
+          if (compiler.getAstAnalyzer().mayHaveSideEffects(n.getFirstChild())) {
             replacement = IR.comma(n.removeFirstChild(), replacement).srcref(n);
           }
           parent.replaceChild(n, replacement);

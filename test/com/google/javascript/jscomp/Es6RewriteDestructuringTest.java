@@ -16,12 +16,13 @@
 package com.google.javascript.jscomp;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.javascript.rhino.jstype.JSTypeNative.OBJECT_TYPE;
 import static com.google.javascript.rhino.testing.TypeSubject.assertType;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.Es6RewriteDestructuring.ObjectDestructuringRewriteMode;
+import com.google.javascript.jscomp.testing.NoninjectingCompiler;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.jstype.JSType;
 import com.google.javascript.rhino.jstype.JSTypeNative;
@@ -60,11 +61,6 @@ public class Es6RewriteDestructuringTest extends CompilerTestCase {
   }
 
   @Override
-  protected int getNumRepetitions() {
-    return 1;
-  }
-
-  @Override
   protected CompilerOptions getOptions() {
     CompilerOptions options = super.getOptions();
     options.setLanguageOut(LanguageMode.ECMASCRIPT3);
@@ -86,7 +82,7 @@ public class Es6RewriteDestructuringTest extends CompilerTestCase {
             "var $jscomp$destructuring$var0 = foo();",
             "var b = $jscomp$destructuring$var0.a;",
             "var d = $jscomp$destructuring$var0.c;"));
-    assertThat(((NoninjectingCompiler) getLastCompiler()).injected).isEmpty();
+    assertThat(((NoninjectingCompiler) getLastCompiler()).getInjected()).isEmpty();
 
     test(
         "var {a,b} = foo();",
@@ -1611,7 +1607,7 @@ public class Es6RewriteDestructuringTest extends CompilerTestCase {
     Node jscompArrayFromIterator =
         getNodeMatchingQName(lastCompiler.getJsRoot(), "$jscomp.arrayFromIterator");
     assertType(jscompArrayFromIterator.getJSType())
-        .toStringIsEqualTo("function(Iterator<number>): Array<number>");
+        .toStringIsEqualTo("function(Iterator<number,?,?>): Array<number>");
 
     JSType arrayOfNumber =
         registry.createTemplatizedType(
@@ -1672,7 +1668,7 @@ public class Es6RewriteDestructuringTest extends CompilerTestCase {
     // `$jscomp$destructuring$var0` has the same type as `obj`
     assertThat(
             getAllNodesMatchingQName(jsRoot, "$jscomp$destructuring$var0").stream()
-                .map(node -> node.getJSType())
+                .map(Node::getJSType)
                 .collect(Collectors.toSet()))
         .containsExactly(objType);
   }
@@ -1709,7 +1705,7 @@ public class Es6RewriteDestructuringTest extends CompilerTestCase {
   }
 
   @Test
-  public void testObjectDestructuringRest_getsCorrectTypes() {
+  public void testObjectDestructuringRest_typesRestAsObject() {
     test(
         lines(
             "const obj = {a: 3, b: 'string', c: null};", //
@@ -1733,18 +1729,10 @@ public class Es6RewriteDestructuringTest extends CompilerTestCase {
     Node jscompDestructuringVar1Name = getNodeMatchingQName(jsRoot, "$jscomp$destructuring$var1");
     assertType(jscompDestructuringVar1Name.getJSType()).isEqualTo(objType);
 
-    // `rest` has the type `{a: number, b: string, c: null}`
+    // TODO(b/128355893) Do better inferrence. For now we just consider `rest` an `Object` rather
+    // than trying to figure out what properties it gets.
     Node restName = getNodeMatchingQName(jsRoot, "rest");
-    assertType(restName.getJSType())
-        .isEqualTo(
-            registry.createRecordType(
-                ImmutableMap.of(
-                    "a", registry.getNativeType(JSTypeNative.NUMBER_TYPE),
-                    "b", registry.getNativeType(JSTypeNative.STRING_TYPE),
-                    "c", registry.getNativeType(JSTypeNative.NULL_TYPE))));
-    // TODO(lharker): should this be true? it's not because objType is a PrototypeObjectType, which
-    // does not compare as structurally equal by default.
-    assertType(restName.getJSType()).isNotEqualTo(objType);
+    assertType(restName.getJSType()).isEqualTo(registry.getNativeType(OBJECT_TYPE));
   }
 
   /** Returns a list of all nodes in the given AST that matches the given qualified name */

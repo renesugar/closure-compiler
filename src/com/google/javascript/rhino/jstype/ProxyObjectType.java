@@ -58,6 +58,8 @@ import java.util.Collections;
 public class ProxyObjectType extends ObjectType {
   private static final long serialVersionUID = 1L;
 
+  private static final JSTypeClass TYPE_CLASS = JSTypeClass.PROXY_OBJECT;
+
   private JSType referencedType;
   private ObjectType referencedObjType;
 
@@ -69,6 +71,13 @@ public class ProxyObjectType extends ObjectType {
                   TemplateTypeMap templateTypeMap) {
     super(registry, templateTypeMap);
     setReferencedType(checkNotNull(referencedType));
+
+    registry.getResolver().resolveIfClosed(this, TYPE_CLASS);
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return TYPE_CLASS;
   }
 
   @Override
@@ -91,12 +100,18 @@ public class ProxyObjectType extends ObjectType {
   }
 
   final void setReferencedType(JSType referencedType) {
+    checkNotNull(referencedType);
     this.referencedType = referencedType;
     if (referencedType instanceof ObjectType) {
       this.referencedObjType = (ObjectType) referencedType;
     } else {
       this.referencedObjType = null;
     }
+  }
+
+  @Override
+  public final boolean loosenTypecheckingDueToForwardReferencedSupertype() {
+    return referencedType.loosenTypecheckingDueToForwardReferencedSupertype();
   }
 
   @Override
@@ -223,8 +238,7 @@ public class ProxyObjectType extends ObjectType {
 
   @Override
   public final boolean isNativeObjectType() {
-    return referencedObjType == null
-        ? false : referencedObjType.isNativeObjectType();
+    return referencedObjType == null ? false : referencedObjType.isNativeObjectType();
   }
 
   @Override
@@ -253,26 +267,15 @@ public class ProxyObjectType extends ObjectType {
   }
 
   @Override
-  public boolean isSubtype(JSType that) {
-    return referencedType.isSubtype(that, ImplCache.create(), SubtypingMode.NORMAL);
-  }
-
-  @Override
-  protected boolean isSubtype(JSType that,
-      ImplCache implicitImplCache, SubtypingMode subtypingMode) {
-    return referencedType.isSubtype(that, implicitImplCache, subtypingMode);
-  }
-
-  @Override
   public final FunctionType getOwnerFunction() {
-    return referencedObjType == null
-        ? null : referencedObjType.getOwnerFunction();
+    return referencedObjType == null ? null : referencedObjType.getOwnerFunction();
   }
 
   @Override
   public Iterable<ObjectType> getCtorImplementedInterfaces() {
-    return referencedObjType == null ? Collections.<ObjectType>emptyList() :
-        referencedObjType.getCtorImplementedInterfaces();
+    return referencedObjType == null
+        ? ImmutableList.of()
+        : referencedObjType.getCtorImplementedInterfaces();
   }
 
   @Override
@@ -288,14 +291,13 @@ public class ProxyObjectType extends ObjectType {
   }
 
   @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return referencedType.appendTo(sb, forAnnotations);
+  void appendTo(TypeStringBuilder sb) {
+    referencedType.appendTo(sb);
   }
 
   @Override
   public final ObjectType getImplicitPrototype() {
-    return referencedObjType == null ? null :
-        referencedObjType.getImplicitPrototype();
+    return referencedObjType == null ? null : referencedObjType.getImplicitPrototype();
   }
 
   @Override
@@ -306,8 +308,7 @@ public class ProxyObjectType extends ObjectType {
 
   @Override
   public final boolean removeProperty(String name) {
-    return referencedObjType == null ? false :
-        referencedObjType.removeProperty(name);
+    return referencedObjType == null ? false : referencedObjType.removeProperty(name);
   }
 
   @Override
@@ -336,14 +337,17 @@ public class ProxyObjectType extends ObjectType {
 
   @Override
   public final FunctionType getConstructor() {
-    return referencedObjType == null ? null :
-        referencedObjType.getConstructor();
+    return referencedObjType == null ? null : referencedObjType.getConstructor();
   }
 
   @Override
   public ImmutableList<JSType> getTemplateTypes() {
-    return referencedObjType == null ? null :
-        referencedObjType.getTemplateTypes();
+    return referencedObjType == null ? null : referencedObjType.getTemplateTypes();
+  }
+
+  @Override
+  public int getTemplateParamCount() {
+    return referencedType.getTemplateParamCount();
   }
 
   public final <T> T visitReferenceType(Visitor<T> visitor) {
@@ -363,11 +367,6 @@ public class ProxyObjectType extends ObjectType {
   JSType resolveInternal(ErrorReporter reporter) {
     setReferencedType(referencedType.resolve(reporter));
     return this;
-  }
-
-  @Override
-  public final String toDebugHashCodeString() {
-    return "{proxy:" + referencedType.toDebugHashCodeString() + "}";
   }
 
   @Override

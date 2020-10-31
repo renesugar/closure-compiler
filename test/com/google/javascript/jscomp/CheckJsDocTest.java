@@ -24,6 +24,7 @@ import static com.google.javascript.jscomp.CheckJSDoc.INVALID_DEFINE_ON_LET;
 import static com.google.javascript.jscomp.CheckJSDoc.INVALID_MODIFIES_ANNOTATION;
 import static com.google.javascript.jscomp.CheckJSDoc.INVALID_NO_SIDE_EFFECT_ANNOTATION;
 import static com.google.javascript.jscomp.CheckJSDoc.JSDOC_IN_BLOCK_COMMENT;
+import static com.google.javascript.jscomp.CheckJSDoc.JSDOC_ON_RETURN;
 import static com.google.javascript.jscomp.CheckJSDoc.MISPLACED_ANNOTATION;
 import static com.google.javascript.jscomp.CheckJSDoc.MISPLACED_MSG_ANNOTATION;
 import static com.google.javascript.jscomp.CheckJSDoc.MISPLACED_SUPPRESS;
@@ -37,8 +38,6 @@ import org.junit.runners.JUnit4;
 
 /**
  * Tests for {@link CheckJSDoc}.
- *
- * @author chadkillingsworth@gmail.com (Chad Killingsworth)
  */
 @RunWith(JUnit4.class)
 public final class CheckJsDocTest extends CompilerTestCase {
@@ -108,6 +107,13 @@ public final class CheckJsDocTest extends CompilerTestCase {
     testWarning("[/** string */ x.y] = ['hi'];", CheckJSDoc.MISPLACED_ANNOTATION);
     testWarning("[/** string */ x.y = 'lo'] = ['hi'];", CheckJSDoc.MISPLACED_ANNOTATION);
     testWarning("[/** string */ f().y['z']] = [];", CheckJSDoc.MISPLACED_ANNOTATION);
+  }
+
+  // just here to make sure import.meta doesn't break anything
+  @Test
+  public void testImportMeta() {
+    setLanguage(LanguageMode.UNSUPPORTED, LanguageMode.UNSUPPORTED);
+    testSame("var /** number */ x = foo; import.meta.foo = x");
   }
 
   @Test
@@ -330,6 +336,11 @@ public final class CheckJsDocTest extends CompilerTestCase {
   @Test
   public void testAbstract_class_withES6Modules() {
     testSame("export /** @abstract */ class Foo { constructor() {}; };");
+  }
+
+  @Test
+  public void testAbstract_class_withSymbolNamedMethod() {
+    testSame("/** @abstract */ class Foo { /** @abstract */ [Symbol.iterator]() {} }");
   }
 
   @Test
@@ -661,6 +672,12 @@ public final class CheckJsDocTest extends CompilerTestCase {
   }
 
   @Test
+  public void testMisplacedTypeAnnotationOnStubPropertyOnCall() {
+    testWarning("/** @type {string} */ a.b.c().d;", MISPLACED_ANNOTATION);
+    testWarning("/** @typedef {string} */ a.b.c().d;", MISPLACED_ANNOTATION);
+  }
+
+  @Test
   public void testMisplacedTypeAnnotation_withES6Modules() {
     testWarning(
         "export var o = {}; /** @type {string} */ o.prop1 = 1, o.prop2 = 2;", MISPLACED_ANNOTATION);
@@ -789,35 +806,59 @@ public final class CheckJsDocTest extends CompilerTestCase {
         lines(
             "export class C { /** @template T \n @param {T} a\n @param {T} b \n */ ",
             "constructor(a,b){} }"));
+    testSame("export /** @template T */ function f(/** T */ a) {}");
   }
 
   @Test
-  public void testBadTemplate1() {
+  public void testGoodTemplate_constructorDefinition() {
+    testSame(
+        lines(
+            "x.y.z = goog.defineClass(null, {",
+            "  /** @template T */ constructor: function() {}",
+            "});"));
+  }
+
+  @Test
+  public void testGoodTemplate_FunctionDefinition() {
+    testSame("/** @template T */ function f() {}");
+    testSame("/** @template T */ var f = function() {};");
+    testSame("/** @template T */ Foo.prototype.f = function() {};");
+    testSame("/** @template T */ function f(/** T */ a) {}");
+  }
+
+  @Test
+  public void testBadTemplate_functionInvocation() {
     testBadTemplate("/** @template T */ foo();");
   }
 
   @Test
-  public void testBadTemplate2() {
-    testBadTemplate(lines(
-        "x.y.z = goog.defineClass(null, {",
-        "  /** @template T */ constructor: function() {}",
-        "});"));
+  public void testGoodTypedef() {
+    testSame("/** @typedef {string} */ var x;");
+    testSame("/** @typedef {string} */ let x;");
+    testSame("/** @typedef {string} */ const x = {};");
+    testSame("/** @typedef {string} */ a.b.c;");
+    testSame("/** @typedef {string} */ a.b.c = {};");
+    testSame(
+        lines(
+            "const C = goog.defineClass(",
+            "   null, {",
+            "     constructor() {},",
+            "     statics: { /** @typedef {string} */ StringType: null},",
+            "});"));
   }
 
   @Test
-  public void testBadTemplate3() {
-    testBadTemplate("/** @template T */ function f() {}");
-    testBadTemplate("/** @template T */ var f = function() {};");
-    testBadTemplate("/** @template T */ Foo.prototype.f = function() {};");
+  public void testBadTypedef_usedAsCast() {
+    testWarning("const s = /** @typedef {?} */ (0);", MISPLACED_ANNOTATION);
   }
 
   @Test
-  public void testBadTemplate_withES6Modules() {
-    testBadTemplate("export /** @template T */ function f() {}");
+  public void testBadTypedef_onFunction() {
+    testWarning("/** @typedef {?} */ function foo() {}", MISPLACED_ANNOTATION);
   }
 
   @Test
-  public void testBadTypedef() {
+  public void testBadTypedef_onClass() {
     testWarning(
         "/** @typedef {{foo: string}} */ class C { constructor() { this.foo = ''; }}",
         MISPLACED_ANNOTATION);
@@ -828,6 +869,51 @@ public final class CheckJsDocTest extends CompilerTestCase {
             "var C = goog.defineClass(null, {",
             "  constructor: function() { this.foo = ''; }",
             "});"),
+        MISPLACED_ANNOTATION);
+  }
+
+  @Test
+  public void testBadTypedef_onInstanceProp() {
+    testWarning(
+        "class C { constructor() { /** @typedef {string} */ this.foo = ''; }}",
+        MISPLACED_ANNOTATION);
+
+    testWarning(
+        "class C { constructor() { this.foo = {}; /** @typedef {string} */ this.foo.bar = ''; }}",
+        MISPLACED_ANNOTATION);
+
+    testWarning(
+        lines(
+            "class D {}",
+            "class C extends D {",
+            "  constructor() {",
+            "    super();",
+            "    /** @typedef {string} */",
+            "    super.foo = ''; }",
+            "}"),
+        MISPLACED_ANNOTATION);
+
+    testWarning(
+        "class C { constructor() { /** @typedef {string} */ this.foo; }}", MISPLACED_ANNOTATION);
+
+    testWarning(
+        "/** @constructor */ function C() { /** @typedef {string} */ this.foo; }",
+        MISPLACED_ANNOTATION);
+  }
+
+  @Test
+  public void testBadTypedef_onPrototypeProp() {
+    testWarning(
+        "/** @constructor */ function C() {} /** @typedef {string} */ C.prototype.foo;",
+        MISPLACED_ANNOTATION);
+
+    testWarning(
+        externs("/** @constructor */ function C() {} /** @typedef {string} */ C.prototype.foo;"),
+        srcs(""),
+        warning(MISPLACED_ANNOTATION));
+
+    testWarning(
+        "/** @constructor */ function C() {} /** @typedef {string} */ C.prototype.foo = 'foobar';",
         MISPLACED_ANNOTATION);
   }
 
@@ -969,6 +1055,11 @@ public final class CheckJsDocTest extends CompilerTestCase {
     testWarning("/** @suppress {uselessCode} */ goog.require('unused.Class');", MISPLACED_SUPPRESS);
     testWarning("const {/** @suppress {duplicate} */ Foo} = foo();", MISPLACED_SUPPRESS);
     testWarning("foo(/** @suppress {duplicate} */ ns.x = 7);", MISPLACED_SUPPRESS);
+
+    testSame("/** @suppress {visibility} */ a.x_ = 0;");
+    testSame("/** @suppress {visibility} */ a.x_ += 0;");
+    testSame("/** @suppress {visibility} */ a.x_ *= 0;");
+    testSame("/** @suppress {visibility} */ a.x_ /= 0;");
   }
 
   @Test
@@ -1014,5 +1105,33 @@ public final class CheckJsDocTest extends CompilerTestCase {
     testSame("/** @closurePrimitive {asserts.fail} */ goog.asserts.fail = function() {};");
     testSame("/** @closurePrimitive {asserts.fail} */ let fail = function() {}");
     testWarning("/** @fileoverview @closurePrimitive {asserts.fail} */", MISPLACED_ANNOTATION);
+  }
+
+  @Test
+  public void testJsDocOnReturn() {
+    // JSDoc on a class defined in return statement is a warning.
+    testWarning(
+        lines(
+            "/** @return {function(new:EventTarget)} */",
+            "function get() {",
+            "/** @implements {EventTarget} */",
+            "return class {};",
+            "}"),
+        JSDOC_ON_RETURN);
+    testWarning("function get() {\n/** @enum {string} */\nreturn {A: 'a'};\n}", JSDOC_ON_RETURN);
+    testWarning("function get() {\n/** @typedef {string} */\nreturn 'a';\n}", MISPLACED_ANNOTATION);
+
+    // No warning when returning a class annotated with JSDoc.
+    testSame(
+        lines(
+            "/** @return {function(new:EventTarget)} */",
+            "function mixin() {",
+            "/** @implements {EventTarget} */",
+            "class MyEventTarget {}",
+            "return MyEventTarget;",
+            "}"));
+
+    // No warning for regular JSDoc.
+    testSame(lines("function f() {", "/** Some value. */", "return 5;", "}"));
   }
 }

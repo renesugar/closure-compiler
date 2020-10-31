@@ -25,8 +25,6 @@ import com.google.javascript.rhino.jstype.JSTypeNative;
 
 /**
  * Class that contains common Matchers that are useful to everyone.
- *
- * @author mknichel@google.com (Mark Knichel)
  */
 public final class Matchers {
   // TODO(mknichel): Make sure all this code works with goog.scope.
@@ -191,8 +189,9 @@ public final class Matchers {
    */
   public static Matcher functionCallWithNumArgs(final int numArgs) {
     return new Matcher() {
-      @Override public boolean matches(Node node, NodeMetadata metadata) {
-        return node.isCall() && (node.getChildCount() - 1) == numArgs;
+      @Override
+      public boolean matches(Node node, NodeMetadata metadata) {
+        return node.isCall() && node.hasXChildren(numArgs + 1);
       }
     };
   }
@@ -210,19 +209,27 @@ public final class Matchers {
     return allOf(functionCallWithNumArgs(numArgs), functionCall(name));
   }
 
-  public static Matcher googRequire(final String namespace) {
-    return new Matcher() {
-      @Override
-      public boolean matches(Node node, NodeMetadata metadata) {
-        return functionCall("goog.require").matches(node, metadata)
+  public static Matcher googRequirelike(final String namespace) {
+    return (Node node, NodeMetadata metadata) ->
+        googRequirelike().matches(node, metadata)
             && node.getSecondChild().isString()
             && node.getSecondChild().getString().equals(namespace);
-      }
-    };
+  }
+
+  public static Matcher googRequirelike() {
+    return anyOf(googRequire(), googRequireType(), googForwardDeclare());
   }
 
   public static Matcher googRequire() {
     return functionCall("goog.require");
+  }
+
+  public static Matcher googRequireType() {
+    return functionCall("goog.requireType");
+  }
+
+  public static Matcher googForwardDeclare() {
+    return functionCall("goog.forwardDeclare");
   }
 
   public static Matcher googModule() {
@@ -285,7 +292,8 @@ public final class Matchers {
    */
   public static Matcher enumDefinitionOfType(final String type) {
     return new Matcher() {
-      @Override public boolean matches(Node node, NodeMetadata metadata) {
+      @Override
+      public boolean matches(Node node, NodeMetadata metadata) {
         JSType providedJsType = getJsType(metadata, type);
         if (providedJsType == null) {
           return false;
@@ -293,8 +301,9 @@ public final class Matchers {
         providedJsType = providedJsType.restrictByNotNullOrUndefined();
 
         JSType jsType = node.getJSType();
-        return jsType != null && jsType.isEnumType() && providedJsType.isEquivalentTo(
-            jsType.toMaybeEnumType().getElementsType().getPrimitiveType());
+        return jsType != null
+            && jsType.isEnumType()
+            && providedJsType.equals(jsType.toMaybeEnumType().getElementsType().getPrimitiveType());
       }
     };
   }
@@ -351,7 +360,7 @@ public final class Matchers {
         return jsDoc != null
             && jsDoc.hasType()
             && jsType != null
-            && providedJsType.isEquivalentTo(jsType.restrictByNotNullOrUndefined());
+            && providedJsType.equals(jsType.restrictByNotNullOrUndefined());
       }
     };
   }
@@ -410,12 +419,12 @@ public final class Matchers {
   }
 
   private static boolean areTypesEquivalentIgnoringGenerics(JSType a, JSType b) {
-    boolean equivalent = a.isEquivalentTo(b);
+    boolean equivalent = a.equals(b);
     if (equivalent) {
       return true;
     }
     if (a.isTemplatizedType()) {
-      return a.toMaybeTemplatizedType().getReferencedType().isEquivalentTo(b);
+      return a.toMaybeTemplatizedType().getReferencedType().equals(b);
     }
     return false;
   }

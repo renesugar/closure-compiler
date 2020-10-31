@@ -39,6 +39,7 @@
 
 package com.google.javascript.rhino.testing;
 
+import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static com.google.javascript.rhino.testing.TypeSubject.assertType;
 import static com.google.javascript.rhino.testing.TypeSubject.types;
@@ -48,7 +49,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.javascript.rhino.JSTypeExpression;
 import com.google.javascript.rhino.Node;
-import com.google.javascript.rhino.jstype.FunctionBuilder;
 import com.google.javascript.rhino.jstype.FunctionType;
 import com.google.javascript.rhino.jstype.JSType;
 import com.google.javascript.rhino.jstype.JSTypeNative;
@@ -56,16 +56,15 @@ import com.google.javascript.rhino.jstype.JSTypeRegistry;
 import com.google.javascript.rhino.jstype.ObjectType;
 import com.google.javascript.rhino.jstype.RecordTypeBuilder;
 import com.google.javascript.rhino.jstype.TemplatizedType;
-import org.junit.Before;
+import org.junit.After;
 
 /** A base class for tests on {@code JSType}s. */
 public abstract class BaseJSTypeTestCase {
-  protected static final String FORWARD_DECLARED_TYPE_NAME = "forwardDeclared";
 
   protected static final Joiner LINE_JOINER = Joiner.on('\n');
 
+  protected final TestErrorReporter errorReporter = new TestErrorReporter();
   protected JSTypeRegistry registry;
-  protected TestErrorReporter errorReporter;
 
   protected JSType ALL_TYPE;
   protected ObjectType NO_OBJECT_TYPE;
@@ -73,6 +72,12 @@ public abstract class BaseJSTypeTestCase {
   protected ObjectType NO_RESOLVED_TYPE;
   protected FunctionType ARRAY_FUNCTION_TYPE;
   protected ObjectType ARRAY_TYPE;
+  protected JSType BIGINT_NUMBER;
+  protected JSType BIGINT_NUMBER_OBJECT;
+  protected JSType BIGINT_NUMBER_STRING;
+  protected JSType BIGINT_NUMBER_STRING_OBJECT;
+  protected ObjectType BIGINT_OBJECT_TYPE;
+  protected JSType BIGINT_TYPE;
   protected JSType BOOLEAN_OBJECT_FUNCTION_TYPE;
   protected ObjectType BOOLEAN_OBJECT_TYPE;
   protected JSType BOOLEAN_TYPE;
@@ -80,7 +85,6 @@ public abstract class BaseJSTypeTestCase {
   protected JSType DATE_FUNCTION_TYPE;
   protected ObjectType DATE_TYPE;
   protected FunctionType FUNCTION_FUNCTION_TYPE;
-  protected FunctionType FUNCTION_INSTANCE_TYPE;
   protected ObjectType FUNCTION_PROTOTYPE;
   protected JSType GREATEST_FUNCTION_TYPE;
   protected JSType LEAST_FUNCTION_TYPE;
@@ -103,18 +107,32 @@ public abstract class BaseJSTypeTestCase {
   protected JSType STRING_TYPE;
   protected ObjectType SYMBOL_OBJECT_TYPE;
   protected JSType SYMBOL_TYPE;
-  protected FunctionType U2U_CONSTRUCTOR_TYPE;
-  protected FunctionType U2U_FUNCTION_TYPE;
+  protected FunctionType FUNCTION_TYPE;
   protected ObjectType UNKNOWN_TYPE;
   protected JSType VOID_TYPE;
 
   protected int NATIVE_PROPERTIES_COUNT;
 
-  @Before
-  public void setUp() throws Exception {
-    errorReporter = new TestErrorReporter(null, null);
-    registry = new JSTypeRegistry(errorReporter, ImmutableSet.of(FORWARD_DECLARED_TYPE_NAME));
+  public BaseJSTypeTestCase() {
+    this(null);
+  }
+
+  public BaseJSTypeTestCase(JSTypeRegistry registry) {
+    this.registry =
+        (registry == null)
+            ? new JSTypeRegistry(errorReporter, ImmutableSet.of())
+            : registry;
     initTypes();
+  }
+
+  protected void resetRegistryWithForwardDeclaredName(String name) {
+    this.registry = new JSTypeRegistry(errorReporter, ImmutableSet.of(name));
+    initTypes();
+  }
+
+  @After
+  public void validateWarningsAndErrors() {
+    errorReporter.verifyHasEncounteredAllWarningsAndErrors();
   }
 
   protected void initTypes() {
@@ -124,6 +142,12 @@ public abstract class BaseJSTypeTestCase {
     NO_RESOLVED_TYPE = registry.getNativeObjectType(JSTypeNative.NO_RESOLVED_TYPE);
     ARRAY_FUNCTION_TYPE = registry.getNativeFunctionType(JSTypeNative.ARRAY_FUNCTION_TYPE);
     ARRAY_TYPE = registry.getNativeObjectType(JSTypeNative.ARRAY_TYPE);
+    BIGINT_NUMBER = registry.getNativeType(JSTypeNative.BIGINT_NUMBER);
+    BIGINT_NUMBER_OBJECT = registry.getNativeType(JSTypeNative.BIGINT_NUMBER_OBJECT);
+    BIGINT_NUMBER_STRING = registry.getNativeType(JSTypeNative.BIGINT_NUMBER_STRING);
+    BIGINT_NUMBER_STRING_OBJECT = registry.getNativeType(JSTypeNative.BIGINT_NUMBER_STRING_OBJECT);
+    BIGINT_OBJECT_TYPE = registry.getNativeObjectType(JSTypeNative.BIGINT_OBJECT_TYPE);
+    BIGINT_TYPE = registry.getNativeType(JSTypeNative.BIGINT_TYPE);
     BOOLEAN_OBJECT_FUNCTION_TYPE =
         registry.getNativeType(JSTypeNative.BOOLEAN_OBJECT_FUNCTION_TYPE);
     BOOLEAN_OBJECT_TYPE = registry.getNativeObjectType(JSTypeNative.BOOLEAN_OBJECT_TYPE);
@@ -132,7 +156,7 @@ public abstract class BaseJSTypeTestCase {
     DATE_FUNCTION_TYPE = registry.getNativeType(JSTypeNative.DATE_FUNCTION_TYPE);
     DATE_TYPE = registry.getNativeObjectType(JSTypeNative.DATE_TYPE);
     FUNCTION_FUNCTION_TYPE = registry.getNativeFunctionType(JSTypeNative.FUNCTION_FUNCTION_TYPE);
-    FUNCTION_INSTANCE_TYPE = registry.getNativeFunctionType(JSTypeNative.FUNCTION_INSTANCE_TYPE);
+    FUNCTION_TYPE = registry.getNativeFunctionType(JSTypeNative.FUNCTION_TYPE);
     FUNCTION_PROTOTYPE = registry.getNativeObjectType(JSTypeNative.FUNCTION_PROTOTYPE);
     GREATEST_FUNCTION_TYPE = registry.getNativeType(JSTypeNative.GREATEST_FUNCTION_TYPE);
     LEAST_FUNCTION_TYPE = registry.getNativeType(JSTypeNative.LEAST_FUNCTION_TYPE);
@@ -144,11 +168,8 @@ public abstract class BaseJSTypeTestCase {
     NUMBER_TYPE = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
     OBJECT_FUNCTION_TYPE = registry.getNativeFunctionType(JSTypeNative.OBJECT_FUNCTION_TYPE);
     NULL_VOID = registry.getNativeType(JSTypeNative.NULL_VOID);
-    OBJECT_NUMBER_STRING = registry.getNativeType(JSTypeNative.OBJECT_NUMBER_STRING);
-    OBJECT_NUMBER_STRING_BOOLEAN =
-        registry.getNativeType(JSTypeNative.OBJECT_NUMBER_STRING_BOOLEAN);
-    OBJECT_PROTOTYPE = registry.getNativeType(JSTypeNative.OBJECT_PROTOTYPE);
     OBJECT_TYPE = registry.getNativeObjectType(JSTypeNative.OBJECT_TYPE);
+    OBJECT_PROTOTYPE = registry.getNativeType(JSTypeNative.OBJECT_PROTOTYPE);
     REGEXP_FUNCTION_TYPE = registry.getNativeType(JSTypeNative.REGEXP_FUNCTION_TYPE);
     REGEXP_TYPE = registry.getNativeObjectType(JSTypeNative.REGEXP_TYPE);
     STRING_OBJECT_FUNCTION_TYPE = registry.getNativeType(JSTypeNative.STRING_OBJECT_FUNCTION_TYPE);
@@ -156,10 +177,12 @@ public abstract class BaseJSTypeTestCase {
     STRING_TYPE = registry.getNativeType(JSTypeNative.STRING_TYPE);
     SYMBOL_OBJECT_TYPE = registry.getNativeObjectType(JSTypeNative.SYMBOL_OBJECT_TYPE);
     SYMBOL_TYPE = registry.getNativeType(JSTypeNative.SYMBOL_TYPE);
-    U2U_CONSTRUCTOR_TYPE = registry.getNativeFunctionType(JSTypeNative.U2U_CONSTRUCTOR_TYPE);
-    U2U_FUNCTION_TYPE = registry.getNativeFunctionType(JSTypeNative.U2U_FUNCTION_TYPE);
     UNKNOWN_TYPE = registry.getNativeObjectType(JSTypeNative.UNKNOWN_TYPE);
     VOID_TYPE = registry.getNativeType(JSTypeNative.VOID_TYPE);
+
+    OBJECT_NUMBER_STRING = registry.createUnionType(OBJECT_TYPE, NUMBER_TYPE, STRING_TYPE);
+    OBJECT_NUMBER_STRING_BOOLEAN =
+        registry.createUnionType(OBJECT_TYPE, NUMBER_TYPE, STRING_TYPE, BOOLEAN_TYPE);
 
     addNativeProperties(registry);
 
@@ -326,9 +349,8 @@ public abstract class BaseJSTypeTestCase {
   private static void addMethod(
       JSTypeRegistry registry, ObjectType receivingType, String methodName,
       JSType returnType) {
-    receivingType.defineDeclaredProperty(methodName,
-        new FunctionBuilder(registry).withReturnType(returnType).build(),
-        null);
+    receivingType.defineDeclaredProperty(
+        methodName, FunctionType.builder(registry).withReturnType(returnType).build(), null);
   }
 
   protected JSType createUnionType(JSType... variants) {
@@ -374,18 +396,18 @@ public abstract class BaseJSTypeTestCase {
   }
 
   protected final void assertTypeEquals(JSType a, JSType b) {
-    assertType(b).isStructurallyEqualTo(a);
+    assertType(b).isEqualTo(a);
   }
 
   protected final void assertTypeEquals(String msg, JSType a, JSType b) {
-    assertWithMessage(msg).about(types()).that(b).isStructurallyEqualTo(a);
+    assertWithMessage(msg).about(types()).that(b).isEqualTo(a);
   }
 
   /**
    * Resolves a type expression, expecting the given warnings.
    */
   protected JSType resolve(JSTypeExpression n, String... warnings) {
-    errorReporter.setWarnings(warnings);
+    errorReporter.expectAllWarnings(warnings);
     return n.evaluate(null, registry);
   }
 
@@ -541,6 +563,16 @@ public abstract class BaseJSTypeTestCase {
     assertType(b).isNotEqualTo(a);
   }
 
+  protected void assertCanTestForEqualityWith(JSType t1, JSType t2) {
+    assertThat(t1.canTestForEqualityWith(t2)).isTrue();
+    assertThat(t2.canTestForEqualityWith(t1)).isTrue();
+  }
+
+  protected void assertCannotTestForEqualityWith(JSType t1, JSType t2) {
+    assertThat(t1.canTestForEqualityWith(t2)).isFalse();
+    assertThat(t2.canTestForEqualityWith(t1)).isFalse();
+  }
+
   protected static String lines(String line) {
     return line;
   }
@@ -549,3 +581,4 @@ public abstract class BaseJSTypeTestCase {
     return LINE_JOINER.join(lines);
   }
 }
+

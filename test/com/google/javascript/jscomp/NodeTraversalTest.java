@@ -59,12 +59,12 @@ public final class NodeTraversalTest {
     });
     compiler.initCompilerOptionsIfTesting();
 
-    NodeTraversal t = new NodeTraversal(compiler, null, new Es6SyntacticScopeCreator(compiler));
+    NodeTraversal t = new NodeTraversal(compiler, null, new SyntacticScopeCreator(compiler));
     DiagnosticType dt = DiagnosticType.warning("FOO", "{0}, {1} - {2}");
 
     t.report(new Node(Token.EMPTY), dt, "Foo", "Bar", "Hello");
     assertThat(errors).hasSize(1);
-    assertThat(errors.get(0).description).isEqualTo("Foo, Bar - Hello");
+    assertThat(errors.get(0).getDescription()).isEqualTo("Foo, Bar - Hello");
   }
 
   private static final String TEST_EXCEPTION = "test me";
@@ -123,6 +123,66 @@ public final class NodeTraversalTest {
 
           @Override
           public void visit(NodeTraversal t, Node n, Node parent) {}
+        });
+  }
+
+  @Test
+  public void testGetScopeRoot_inEsModule() {
+    Compiler compiler = new Compiler();
+    String code =
+        lines(
+            "const x = 0;", //
+            "export {x};");
+    Node tree = parse(compiler, code);
+    NodeTraversal.traverse(
+        compiler,
+        tree,
+        new NodeTraversal.Callback() {
+          @Override
+          public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
+            if (n.isModuleBody() || (parent != null && parent.isModuleBody())) {
+              assertNode(t.getScopeRoot()).hasToken(Token.MODULE_BODY);
+            }
+            return true;
+          }
+
+          @Override
+          public void visit(NodeTraversal t, Node n, Node parent) {
+            if (n.isModuleBody() || (parent != null && parent.isModuleBody())) {
+              assertNode(t.getScopeRoot()).hasToken(Token.MODULE_BODY);
+            }
+          }
+        });
+  }
+
+  @Test
+  public void testGetScopeRoot_inGoogModule() {
+    Compiler compiler = new Compiler();
+    String code =
+        lines(
+            "goog.module('a.b');", //
+            "function foo() {",
+            "  var b",
+            "}");
+    Node tree = parse(compiler, code);
+    NodeTraversal.traverse(
+        compiler,
+        tree,
+        new NodeTraversal.Callback() {
+          @Override
+          public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
+            if (n.isModuleBody() || (parent != null && parent.isModuleBody())) {
+              assertNode(t.getScopeRoot()).hasToken(Token.MODULE_BODY);
+            }
+            return true;
+          }
+
+          @Override
+          public void visit(NodeTraversal t, Node n, Node parent) {
+            if (n.isModuleBody() || (parent != null && parent.isModuleBody())) {
+              assertNode(t.getScopeRoot()).hasToken(Token.MODULE_BODY);
+            }
+          }
         });
   }
 
@@ -292,7 +352,7 @@ public final class NodeTraversalTest {
   @Test
   public void testGetCurrentNode() {
     Compiler compiler = new Compiler();
-    ScopeCreator creator = SyntacticScopeCreator.makeUntyped(compiler);
+    ScopeCreator creator = new SyntacticScopeCreator(compiler);
     ExpectNodeOnEnterScope callback = new ExpectNodeOnEnterScope();
     NodeTraversal t = new NodeTraversal(compiler, callback, creator);
 
@@ -330,7 +390,7 @@ public final class NodeTraversalTest {
     CompilerOptions options = new CompilerOptions();
     options.setLanguageIn(LanguageMode.ECMASCRIPT_NEXT);
     compiler.initOptions(options);
-    Es6SyntacticScopeCreator creator = new Es6SyntacticScopeCreator(compiler);
+    SyntacticScopeCreator creator = new SyntacticScopeCreator(compiler);
     ExpectNodeOnEnterScope callback = new ExpectNodeOnEnterScope();
     NodeTraversal t = new NodeTraversal(compiler, callback, creator);
 
@@ -362,7 +422,7 @@ public final class NodeTraversalTest {
     CompilerOptions options = new CompilerOptions();
     options.setLanguageIn(LanguageMode.ECMASCRIPT_2015);
     compiler.initOptions(options);
-    Es6SyntacticScopeCreator creator = new Es6SyntacticScopeCreator(compiler);
+    SyntacticScopeCreator creator = new SyntacticScopeCreator(compiler);
     ExpectNodeOnEnterScope callback = new ExpectNodeOnEnterScope();
     NodeTraversal t = new NodeTraversal(compiler, callback, creator);
 
@@ -399,7 +459,7 @@ public final class NodeTraversalTest {
     CompilerOptions options = new CompilerOptions();
     options.setLanguageIn(LanguageMode.ECMASCRIPT_2015);
     compiler.initOptions(options);
-    Es6SyntacticScopeCreator creator = new Es6SyntacticScopeCreator(compiler);
+    SyntacticScopeCreator creator = new SyntacticScopeCreator(compiler);
     ExpectNodeOnEnterScope callback = new ExpectNodeOnEnterScope();
     NodeTraversal t = new NodeTraversal(compiler, callback, creator);
 
@@ -435,7 +495,7 @@ public final class NodeTraversalTest {
     CompilerOptions options = new CompilerOptions();
     options.setLanguageIn(LanguageMode.ECMASCRIPT_NEXT);
     compiler.initOptions(options);
-    Es6SyntacticScopeCreator creator = new Es6SyntacticScopeCreator(compiler);
+    SyntacticScopeCreator creator = new SyntacticScopeCreator(compiler);
     ExpectNodeOnEnterScope callback = new ExpectNodeOnEnterScope();
     NodeTraversal t = new NodeTraversal(compiler, callback, creator);
 
@@ -462,7 +522,7 @@ public final class NodeTraversalTest {
     CompilerOptions options = new CompilerOptions();
     options.setLanguageIn(LanguageMode.ECMASCRIPT_2015);
     compiler.initOptions(options);
-    Es6SyntacticScopeCreator creator = new Es6SyntacticScopeCreator(compiler);
+    SyntacticScopeCreator creator = new SyntacticScopeCreator(compiler);
     AccessibleCallback callback = new AccessibleCallback();
     NodeTraversal t = new NodeTraversal(compiler, callback, creator);
 
@@ -762,7 +822,7 @@ public final class NodeTraversalTest {
     public void enterScope(NodeTraversal t) {
       assertNode(t.getCurrentNode()).isEqualTo(node);
       assertNode(t.getScopeRoot()).isEqualTo(scopeRoot);
-      if (t.getScopeCreator().hasBlockScope() && (node.isForIn() || node.isForOf())) {
+      if (node.isForIn() || node.isForOf()) {
         node = node.getLastChild();
         scopeRoot = scopeRoot.getLastChild();
       }
@@ -774,7 +834,7 @@ public final class NodeTraversalTest {
 
     @Override
     public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
-      return true;
+      return !entered;
     }
   }
 

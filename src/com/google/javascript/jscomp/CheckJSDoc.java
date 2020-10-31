@@ -31,16 +31,15 @@ import javax.annotation.Nullable;
 
 /**
  * Checks for misplaced, misused or deprecated JSDoc annotations.
- *
- * @author chadkillingsworth@gmail.com (Chad Killingsworth)
  */
 final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompilerPass {
 
   public static final DiagnosticType MISPLACED_MSG_ANNOTATION =
       DiagnosticType.disabled(
           "JSC_MISPLACED_MSG_ANNOTATION",
-          "Misplaced message annotation. @desc, @hidden, and @meaning annotations should only "
-              + "be on message nodes.\nMessage constants must be prefixed with 'MSG_'.");
+          "Misplaced message annotation. @desc, @hidden, @meaning, and @alternateMessageId"
+              + " annotations should be only on message nodes."
+              + "\nMessage constants must be prefixed with 'MSG_'.");
 
   public static final DiagnosticType MISPLACED_ANNOTATION =
       DiagnosticType.warning("JSC_MISPLACED_ANNOTATION",
@@ -86,6 +85,10 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
       DiagnosticType.warning(
           "JSC_JSDOC_IN_BLOCK_COMMENT",
           "Non-JSDoc comment has annotations. Did you mean to start it with '/**'?");
+
+  public static final DiagnosticType JSDOC_ON_RETURN =
+      DiagnosticType.warning(
+          "JSC_JSDOC_ON_RETURN", "JSDoc annotations are not supported on return.");
 
   private static final Pattern COMMENT_PATTERN =
       Pattern.compile("(/|(\n[ \t]*))\\*[ \t]*@[a-zA-Z]+[ \t\n{]");
@@ -156,6 +159,7 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
     validateSuppress(n, info);
     validateImplicitCast(n, info);
     validateClosurePrimitive(n, info);
+    validateReturnJsDoc(n, info);
   }
 
   private void validateSuppress(Node n, JSDocInfo info) {
@@ -188,6 +192,18 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
         break;
 
       case ASSIGN:
+      case ASSIGN_BITOR:
+      case ASSIGN_BITXOR:
+      case ASSIGN_BITAND:
+      case ASSIGN_LSH:
+      case ASSIGN_RSH:
+      case ASSIGN_URSH:
+      case ASSIGN_ADD:
+      case ASSIGN_SUB:
+      case ASSIGN_MUL:
+      case ASSIGN_DIV:
+      case ASSIGN_MOD:
+      case ASSIGN_EXPONENT:
       case GETPROP:
         if (n.getParent().isExprResult()) {
           return;
@@ -225,9 +241,35 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
   }
 
   private void validateTypedefs(Node n, JSDocInfo info) {
-    if (info != null && info.hasTypedefType() && isClassDecl(n)) {
-      reportMisplaced(n, "typedef", "@typedef does not make sense on a class declaration.");
+    if (info == null || !info.hasTypedefType()) {
+      return;
     }
+    if (isClassDecl(n)) {
+      reportMisplaced(n, "typedef", "@typedef is not allowed on a class declaration.");
+      return;
+    }
+    Node lvalue = NodeUtil.isNameDeclaration(n) || n.isAssign() ? n.getFirstChild() : n;
+    // Static properties for goog.defineClass are rewritten to qualified names before typechecking
+    // runs and are valid as @typedefs.
+    if (!lvalue.isQualifiedName() && !isGoogDefineClassStatic(lvalue)) {
+      reportMisplaced(
+          n,
+          "typedef",
+          "@typedef is only allowed on qualified name declarations. Did you mean @type?");
+    } else if (isPrototypeOrInstanceDecl(lvalue)) {
+      reportMisplaced(
+          n,
+          "typedef",
+          "@typedef is not allowed on instance or prototype properties. Did you mean @type?");
+    }
+  }
+
+  /** Whether this is a property in this object: {@code goog.defineClass(superClass, {statics: {} */
+  private boolean isGoogDefineClassStatic(Node n) {
+    return n.isStringKey()
+        && n.getParent().isObjectLit()
+        && n.getGrandparent().isStringKey()
+        && n.getGrandparent().getString().equals("statics");
   }
 
   private void validateTemplates(Node n, JSDocInfo info) {
@@ -235,16 +277,11 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
         && !info.getTemplateTypeNames().isEmpty()
         && !info.isConstructorOrInterface()
         && !isClassDecl(n)
-        && !info.containsFunctionDeclaration()) {
-      if (getFunctionDecl(n) != null) {
-        reportMisplaced(n, "template",
-            "The template variable is unused."
-            + " Please remove the @template annotation.");
-      } else {
+        && !info.containsFunctionDeclaration()
+        && getFunctionDecl(n) == null) {
         reportMisplaced(n, "template",
             "@template is only allowed in class, constructor, interface, function "
             + "or method declarations");
-      }
     }
   }
 
@@ -253,7 +290,7 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
    *     specified node, no null if no such function exists.
    */
   @Nullable
-  private Node getFunctionDecl(Node n) {
+  private static Node getFunctionDecl(Node n) {
     if (n.isFunction()) {
       return n;
     }
@@ -280,6 +317,10 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
       return n.getFirstChild();
     }
 
+    if (n.isComputedProp() && n.getLastChild().isFunction()) {
+      return n.getLastChild();
+    }
+
     return null;
   }
 
@@ -297,6 +338,17 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
   private boolean isClass(Node n) {
     return n.isClass()
         || (n.isCall() && compiler.getCodingConvention().isClassFactoryCall(n));
+  }
+
+  private static boolean isPrototypeOrInstanceDecl(Node n) {
+    if (n.isStringKey()) {
+      return false;
+    }
+    if (NodeUtil.isPrototypeProperty(n)) {
+      return true;
+    }
+    Node receiver = NodeUtil.getRootOfQualifiedName(n);
+    return receiver.isThis() || receiver.isSuper();
   }
 
   /**
@@ -350,6 +402,7 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
     if (!info.isConstructor()
         && !n.isMemberFunctionDef()
         && !n.isStringKey()
+        && !n.isComputedProp()
         && !n.isGetterDef()
         && !n.isSetterDef()
         && !NodeUtil.isPrototypeMethod(functionNode)) {
@@ -369,7 +422,7 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
     }
   }
 
-  private boolean hasClassLevelJsDoc(JSDocInfo info) {
+  private static boolean hasClassLevelJsDoc(JSDocInfo info) {
     return info.isConstructorOrInterface()
         || info.hasBaseType()
         || info.getImplementedInterfaceCount() != 0
@@ -471,20 +524,20 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
   }
 
   /**
-   * Checks that annotations for messages ({@code @desc}, {@code @hidden},
-   * and {@code @meaning})
-   * are in the proper place, namely on names starting with MSG_ which
-   * indicates they should be
-   * extracted for translation. A later pass checks that the right side is
+   * Checks that annotations for messages ({@code @desc}, {@code @hidden}, {@code @meaning} and
+   * {@code @alternateMessageId}) are in the proper place, namely on names starting with MSG_ which
+   * indicates they should be extracted for translation. A later pass checks that the right side is
    * a call to goog.getMsg.
    */
-  private void validateMsgJsDoc(Node n,
-      JSDocInfo info) {
+  private void validateMsgJsDoc(Node n, JSDocInfo info) {
     if (info == null) {
       return;
     }
 
-    if (info.getDescription() != null || info.isHidden() || info.getMeaning() != null) {
+    if (info.getDescription() != null
+        || info.isHidden()
+        || info.getMeaning() != null
+        || info.getAlternateMessageId() != null) {
       boolean descOkay = false;
       switch (n.getToken()) {
         case ASSIGN:
@@ -511,7 +564,7 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
   }
 
   /** Returns whether of not the given name is valid target for the result of goog.getMsg */
-  private boolean isValidMsgName(Node nameNode) {
+  private static boolean isValidMsgName(Node nameNode) {
     if (nameNode.isName() || nameNode.isStringKey()) {
       return nameNode.getString().startsWith("MSG_");
     } else if (nameNode.isQualifiedName()) {
@@ -563,10 +616,9 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
         // Property assignments are valid, if at the root of an expression.
         case ASSIGN: {
           Node lvalue = n.getFirstChild();
-          valid = n.getParent().isExprResult()
-              && (lvalue.isGetProp()
-                  || lvalue.isGetElem()
-                  || lvalue.matchesQualifiedName("exports"));
+            valid =
+                n.getParent().isExprResult()
+                    && (lvalue.isGetProp() || lvalue.isGetElem() || lvalue.matchesName("exports"));
           break;
         }
         case GETPROP:
@@ -586,10 +638,8 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
     }
   }
 
-  /**
-   * Is it valid to have a type annotation on the given NAME node?
-   */
-  private boolean isTypeAnnotationAllowedForName(Node n) {
+  /** Is it valid to have a type annotation on the given NAME node? */
+  private static boolean isTypeAnnotationAllowedForName(Node n) {
     checkState(n.isName(), n);
     // Only allow type annotations on nodes used as an lvalue.
     if (!NodeUtil.isLValue(n)) {
@@ -691,6 +741,17 @@ final class CheckJSDoc extends AbstractPostOrderCallback implements HotSwapCompi
 
     if (!isJSDocOnFunctionNode(n, info)) {
       report(n, MISPLACED_ANNOTATION, "closurePrimitive", "must be on a function node");
+    }
+  }
+
+  /** Checks that there are no annotations on return. */
+  private void validateReturnJsDoc(Node n, JSDocInfo info) {
+    if (!n.isReturn() || info == null) {
+      return;
+    }
+    // @type and @typedef are handled separately
+    if (info.containsDeclaration() && !info.hasType() && !info.hasTypedefType()) {
+      report(n, JSDOC_ON_RETURN);
     }
   }
 }

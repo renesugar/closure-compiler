@@ -54,6 +54,11 @@ public class VoidType extends ValueType {
   }
 
   @Override
+  JSTypeClass getTypeClass() {
+    return JSTypeClass.VOID;
+  }
+
+  @Override
   public JSType restrictByNotNullOrUndefined() {
     return registry.getNativeType(JSTypeNative.NO_TYPE);
   }
@@ -102,11 +107,6 @@ public class VoidType extends ValueType {
   @Override
   public boolean isExplicitlyVoidable() {
     return true;
-  }
-
-  @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return sb.append(getDisplayName());
   }
 
   @Override

@@ -16,64 +16,57 @@
 
 package com.google.javascript.jscomp;
 
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.javascript.rhino.jstype.JSTypeNative.UNKNOWN_TYPE;
 
-import com.google.javascript.jscomp.CodingConvention.AssertionFunctionSpec;
+import com.google.javascript.jscomp.CodingConvention.AssertionFunctionLookup;
 import com.google.javascript.jscomp.NodeTraversal.AbstractScopedCallback;
 import com.google.javascript.jscomp.type.ReverseAbstractInterpreter;
 import com.google.javascript.rhino.Node;
-import java.util.HashMap;
-import java.util.Map;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import com.google.javascript.rhino.jstype.JSTypeResolver;
 
-/**
- * A compiler pass to run the type inference analysis.
- *
- */
-class TypeInferencePass implements CompilerPass {
+/** A compiler pass to run the type inference analysis. */
+class TypeInferencePass {
 
   static final DiagnosticType DATAFLOW_ERROR = DiagnosticType.error(
       "JSC_INTERNAL_ERROR_DATAFLOW",
       "non-monotonic data-flow analysis");
 
   private final AbstractCompiler compiler;
+  private final JSTypeRegistry registry;
   private final ReverseAbstractInterpreter reverseInterpreter;
-  private final TypedScope topScope;
+  private TypedScope topScope;
   private final TypedScopeCreator scopeCreator;
-  private final Map<String, AssertionFunctionSpec> assertionFunctionsMap;
+  private final AssertionFunctionLookup assertionFunctionLookup;
 
-  TypeInferencePass(AbstractCompiler compiler,
+  TypeInferencePass(
+      AbstractCompiler compiler,
       ReverseAbstractInterpreter reverseInterpreter,
-      TypedScope topScope, TypedScopeCreator scopeCreator) {
+      TypedScopeCreator scopeCreator) {
     this.compiler = compiler;
+    this.registry = compiler.getTypeRegistry();
     this.reverseInterpreter = reverseInterpreter;
-    this.topScope = topScope;
     this.scopeCreator = scopeCreator;
+    this.assertionFunctionLookup =
+        AssertionFunctionLookup.of(compiler.getCodingConvention().getAssertionFunctions());
+  }
 
-    assertionFunctionsMap = new HashMap<>();
-    for (AssertionFunctionSpec assertionFunction :
-        compiler.getCodingConvention().getAssertionFunctions()) {
-      assertionFunctionsMap.put(assertionFunction.getFunctionName(),
-          assertionFunction);
-    }
+  TypeInferencePass reuseTopScope(TypedScope topScope) {
+    checkNotNull(topScope);
+    checkState(this.topScope == null);
+    this.topScope = topScope;
+    return this;
   }
 
   /**
-   * Main entry point for type inference when running over the whole tree.
+   * Execute type inference running over part of the scope tree.
    *
-   * @param externsRoot The root of the externs parse tree.
-   * @param jsRoot The root of the input parse tree to be checked.
+   * @return the top scope, either newly created, or patched by this inference.
    */
-  @Override
-  public void process(Node externsRoot, Node jsRoot) {
-    Node externsAndJs = jsRoot.getParent();
-    checkState(externsAndJs != null);
-    checkState(externsRoot == null || externsAndJs.hasChild(externsRoot));
-
-    inferAllScopes(externsAndJs);
-  }
-
-  /** Entry point for type inference when running over part of the tree. */
-  void inferAllScopes(Node node) {
+  TypedScope inferAllScopes(Node inferenceRoot) {
     // Type analysis happens in two major phases.
     // 1) Finding all the symbols.
     // 2) Propagating all the inferred types.
@@ -97,26 +90,48 @@ class TypeInferencePass implements CompilerPass {
     // ns.method();
     // In this code, we need to build the symbol table for the inner scope in
     // order to propagate the type of ns.method in the outer scope.
-    (new NodeTraversal(
-        compiler, new FirstScopeBuildingCallback(), scopeCreator))
-        .traverseWithScope(node, topScope);
+    try (JSTypeResolver.Closer closer = this.registry.getResolver().openForDefinition()) {
+      if (this.topScope == null) {
+        checkState(inferenceRoot.isRoot());
+        checkState(inferenceRoot.getParent() == null);
+        this.topScope = scopeCreator.createScope(inferenceRoot, null);
+      } else {
+        checkState(inferenceRoot.isScript());
+        scopeCreator.patchGlobalScope(this.topScope, inferenceRoot);
+      }
 
-    scopeCreator.resolveTypes();
+      new NodeTraversal(compiler, new FirstScopeBuildingCallback(), scopeCreator)
+          .traverseWithScope(inferenceRoot, this.topScope);
+      scopeCreator.resolveWeakImportsPreResolution();
+    }
+    scopeCreator.undoTypeAliasChains();
 
-    (new NodeTraversal(
-        compiler, new SecondScopeBuildingCallback(), scopeCreator))
-        .traverseWithScope(node, topScope);
+    new NodeTraversal(compiler, new SecondScopeBuildingCallback(), scopeCreator)
+        .traverseWithScope(inferenceRoot, this.topScope);
 
-    // Resolve any new type names found during the inference.
-    // This runs for nested block scopes after infer runs on the CFG root.
-    compiler.getTypeRegistry().resolveTypes();
+    // Normalize TypedVars to have the '?' type instead of null after inference is complete. This
+    // currently cannot be done any earlier because it breaks inference of variables assigned in
+    // local scopes.
+    // TODO(b/149843534): this should be a crash instead.
+    final JSType unknownType = this.registry.getNativeType(UNKNOWN_TYPE);
+    for (TypedVar var : this.scopeCreator.getAllSymbols()) {
+      if (var.getType() == null) {
+        var.setType(unknownType);
+      }
+    }
+
+    return this.topScope;
   }
 
-  void inferScope(Node n, TypedScope scope) {
+  private void inferScope(Node n, TypedScope scope) {
     TypeInference typeInference =
         new TypeInference(
-            compiler, computeCfg(n), reverseInterpreter, scope, scopeCreator,
-            assertionFunctionsMap);
+            compiler,
+            computeCfg(n),
+            reverseInterpreter,
+            scope,
+            scopeCreator,
+            assertionFunctionLookup);
     try {
       typeInference.analyze();
     } catch (DataFlowAnalysis.MaxIterationsExceededException e) {
@@ -143,7 +158,9 @@ class TypeInferencePass implements CompilerPass {
       // This ensures that incremental compilation only touches the root
       // that's been swapped out.
       TypedScope scope = t.getTypedScope();
-      if (!scope.isBlockScope()) { // ignore scopes that don't have their own CFGs.
+      if (!scope.isBlockScope() && !scope.isModuleScope()) {
+        // ignore scopes that don't have their own CFGs and module scopes, which are visited
+        // as if they were a regular script.
         inferScope(t.getCurrentNode(), scope);
       }
     }

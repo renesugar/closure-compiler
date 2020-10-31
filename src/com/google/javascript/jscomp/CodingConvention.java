@@ -16,24 +16,30 @@
 package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
 
+import com.google.auto.value.AutoValue;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableMap;
 import com.google.errorprone.annotations.Immutable;
+import com.google.javascript.rhino.ClosurePrimitive;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.NominalTypeBuilder;
 import com.google.javascript.rhino.StaticSourceFile;
 import com.google.javascript.rhino.jstype.FunctionType;
+import com.google.javascript.rhino.jstype.JSType;
 import com.google.javascript.rhino.jstype.JSTypeRegistry;
 import com.google.javascript.rhino.jstype.ObjectType;
 import java.io.Serializable;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import javax.annotation.Nullable;
 
 /**
  * CodingConvention defines a set of hooks to customize the behavior of the
  * Compiler for a specific team/company.
- *
  */
 @Immutable
 public interface CodingConvention extends Serializable {
@@ -104,9 +110,18 @@ public interface CodingConvention extends Serializable {
   public boolean isExported(String name, boolean local);
 
   /**
-   * Should be isExported(name, true) || isExported(name, false);
+   * Equivalent to `isExported(name, true) || isExported(name, false);`
+   *
+   * <p>Should only be used to check if a property is exported. Variables should always use {@link
+   * #isExported(String, boolean)}, as in most cases local variables should not be treated as
+   * exported.
+   *
+   * <p>Do not override! Unfortunately, that cannot be enforced without making this an abstract
+   * class.
    */
-  public boolean isExported(String name);
+  default boolean isExported(String name) {
+    return isExported(name, true) || isExported(name, false);
+  }
 
   /**
    * Check whether the property name is eligible for renaming.
@@ -291,11 +306,6 @@ public interface CodingConvention extends Serializable {
   public String getGlobalObject();
 
   /**
-   * Whether this statement is creating an alias of the global object
-   */
-  public boolean isAliasingGlobalThis(Node n);
-
-  /**
    * A Bind instance or null.
    */
   public Bind describeFunctionBind(Node n);
@@ -303,25 +313,18 @@ public interface CodingConvention extends Serializable {
   /**
    * A Bind instance or null.
    *
-   * When seeing an expression exp1.bind(recv, arg1, ...);
-   * we only know that it's a function bind if exp1 has type function.
-   * W/out type info, exp1 has certainly a function type only if it's a
+   * <p>When seeing an expression exp1.bind(recv, arg1, ...); we only know that it's a function bind
+   * if exp1 has type function. W/out type info, exp1 has certainly a function type only if it's a
    * function literal.
    *
-   * If (the old) type checking has already happened, exp1's type is attached to
-   * the AST node.
-   * When iCheckTypes is true, describeFunctionBind looks for that type.
+   * <p>If type checking has already happened, exp1's type is attached to the AST node. When
+   * iCheckTypes is true, describeFunctionBind looks for that type.
    *
-   * The new type inference does not yet attach types to nodes, but we can still
-   * use type information in describeFunctionBind by passing true for
-   * callerChecksTypes.
-   *
-   * @param callerChecksTypes Trust that the caller of this method has verified
-   *        that the bound node has a function type.
+   * @param callerChecksTypes Trust that the caller of this method has verified that the bound node
+   *     has a function type.
    * @param iCheckTypes Check that the bound node has a function type.
    */
-  public Bind describeFunctionBind(
-      Node n, boolean callerChecksTypes, boolean iCheckTypes);
+  public Bind describeFunctionBind(Node n, boolean callerChecksTypes, boolean iCheckTypes);
 
   /** Bind class */
   public static class Bind {
@@ -486,50 +489,66 @@ public interface CodingConvention extends Serializable {
    *       match-return-type handling does not have.
    * </ul>
    */
-  final class AssertionFunctionSpec {
-    private final String functionName;
-    private final AssertionKind kind;
-    private final int paramIndex; // the index of the formal parameter that is actually asserted
+  @Immutable
+  @AutoValue
+  abstract class AssertionFunctionSpec {
+    // TODO(b/126254920): remove this field and always use ClosurePrimitive
+    @Nullable
+    abstract String getFunctionName();
+
+    @Nullable
+    abstract ClosurePrimitive getClosurePrimitive();
+
+    abstract AssertionKind getAssertionKind();
+
+    abstract int getParamIndex(); // the index of the formal parameter that is actually asserted
 
     public enum AssertionKind {
-      TRUTHY, // an assertion that the parameter is 'truthy'
+      TRUTHY, // an assertion that the parameter is 'truthy' and returns the parameter
       MATCHES_RETURN_TYPE // an assertion that the parameter matches the inferred return kind
     }
 
-    private AssertionFunctionSpec(String functionName, AssertionKind kind, int paramIndex) {
-      this.functionName = functionName;
-      this.kind = kind;
-      this.paramIndex = paramIndex;
+    static Builder builder() {
+      return new AutoValue_CodingConvention_AssertionFunctionSpec.Builder().setParamIndex(0);
     }
 
-    /** Returns a truthy assertion function on the first param */
-    public static AssertionFunctionSpec makeTruthyAssertion(String functionName) {
-      return new AssertionFunctionSpec(functionName, AssertionKind.TRUTHY, /* paramIndex= */ 0);
+    public static Builder forTruthy() {
+      return builder().setAssertionKind(AssertionKind.TRUTHY);
     }
 
-    /** Returns an assertion function asserting the first param matches the return type */
-    public static AssertionFunctionSpec makeReturnTypeAssertion(String functionName) {
-      return new AssertionFunctionSpec(functionName, AssertionKind.MATCHES_RETURN_TYPE, 0);
+    public static Builder forMatchesReturn() {
+      return builder().setAssertionKind(AssertionKind.MATCHES_RETURN_TYPE);
     }
 
-    /** Returns an assertion function asserting the nth arg is truthy (0-indexed) */
-    public static AssertionFunctionSpec makeTruthyAssertion(String functionName, int paramIndex) {
-      return new AssertionFunctionSpec(functionName, AssertionKind.TRUTHY, paramIndex);
+    @AutoValue.Builder
+    public abstract static class Builder {
+      public abstract Builder setFunctionName(String name);
+
+      abstract Builder setClosurePrimitive(ClosurePrimitive primitive);
+
+      public abstract Builder setParamIndex(int paramIndex);
+
+      abstract Builder setAssertionKind(AssertionKind kind);
+
+      abstract AssertionFunctionSpec autoBuild();
+
+      public AssertionFunctionSpec build() {
+        AssertionFunctionSpec spec = autoBuild();
+        Preconditions.checkState(
+            spec.getFunctionName() != null || spec.getClosurePrimitive() != null,
+            "Must provide a function name or ClosurePrimitive for each spec");
+        return spec;
+      }
     }
 
-    /** Returns the name of the function. */
-    public String getFunctionName() {
-      return functionName;
-    }
-
-    AssertionKind getAssertionKind() {
-      return this.kind;
+    private Object getId() {
+      return getClosurePrimitive() != null ? getClosurePrimitive() : getFunctionName();
     }
 
     /** Returns which argument is actually being asserted, or null if fewer args than expected */
     @Nullable
-    public Node getAssertedArg(Node firstArg) {
-      for (int i = 0; i < paramIndex; i++) {
+    Node getAssertedArg(Node firstArg) {
+      for (int i = 0; i < getParamIndex(); i++) {
         if (firstArg == null) {
           // If there are fewer arguments than expected, return null instead of crashing in this
           // function.
@@ -538,6 +557,54 @@ public interface CodingConvention extends Serializable {
         firstArg = firstArg.getNext();
       }
       return firstArg;
+    }
+  }
+
+  /** This stores a relation from either name or Closure Primitive to assertion function */
+  @Immutable
+  final class AssertionFunctionLookup {
+    // the key type 'Object' is mutable, but at runtime is only ever a string or ClosurePrimitive
+    @SuppressWarnings("Immutable")
+    private final ImmutableMap<Object, AssertionFunctionSpec> internal;
+
+    private AssertionFunctionLookup(ImmutableMap<Object, AssertionFunctionSpec> internal) {
+      this.internal = internal;
+    }
+
+    /**
+     * Returns a new map containing all the given {@link AssertionFunctionSpec}s
+     *
+     * <p>Assumes that in the input, there is a unique mapping from string name to spec and closure
+     * primitive to spec.
+     */
+    static AssertionFunctionLookup of(Collection<AssertionFunctionSpec> specs) {
+      ImmutableMap<Object, AssertionFunctionSpec> idToSpecMap =
+          specs.stream().collect(toImmutableMap(AssertionFunctionSpec::getId, Function.identity()));
+
+      return new AssertionFunctionLookup(idToSpecMap);
+    }
+
+    /**
+     * Returns the {@link AssertionFunctionSpec} matching the given function reference.
+     *
+     * <p>This first looks up specs by their ClosurePrimitive, then falls back to qualified name
+     */
+    @Nullable
+    AssertionFunctionSpec lookupByCallee(Node callee) {
+      FunctionType fnType = JSType.toMaybeFunctionType(callee.getJSType());
+      if (fnType != null && fnType.getClosurePrimitive() != null) {
+        AssertionFunctionSpec spec = internal.get(fnType.getClosurePrimitive());
+        if (spec != null) {
+          return spec;
+        }
+      }
+
+      // TODO(b/126254920): remove this
+      if (callee.isQualifiedName()) {
+        return internal.get(callee.getQualifiedName());
+      }
+
+      return null;
     }
   }
 }

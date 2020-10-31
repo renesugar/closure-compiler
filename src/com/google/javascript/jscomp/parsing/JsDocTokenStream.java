@@ -23,10 +23,9 @@ import com.google.javascript.rhino.TokenUtil;
 /**
  * This class implements the scanner for JsDoc strings.
  *
- * It is heavily based on Rhino's TokenStream.
- *
+ * <p>It is heavily based on Rhino's TokenStream.
  */
-class JsDocTokenStream {
+public class JsDocTokenStream {
   /*
    * For chars - because we need something out-of-range
    * to check.  (And checking EOF by exception is annoying.)
@@ -34,7 +33,7 @@ class JsDocTokenStream {
    */
   private static final int EOF_CHAR = -1;
 
-  JsDocTokenStream(String sourceString) {
+  public JsDocTokenStream(String sourceString) {
     this(sourceString, 0);
   }
 
@@ -145,7 +144,7 @@ class JsDocTokenStream {
             if (c == '.') {
               c = getChar();
               if (c == '.') {
-                return JsDocToken.ELLIPSIS;
+                return JsDocToken.ITER_REST;
               } else {
                 addToString('.');
               }
@@ -306,7 +305,7 @@ class JsDocTokenStream {
    * so that getCharno() returns a valid character position.
    */
   void update() {
-    charno = getOffset();
+    charno = getLineOffset();
   }
 
   private int peekChar() {
@@ -320,7 +319,7 @@ class JsDocTokenStream {
       cursor++;
       --ungetCursor;
       if (charno == -1) {
-        charno = getOffset();
+        charno = getLineOffset();
       }
       return ungetBuffer[ungetCursor];
     }
@@ -329,7 +328,7 @@ class JsDocTokenStream {
       int c;
       if (sourceCursor == sourceEnd) {
         if (charno == -1) {
-          charno = getOffset();
+          charno = getLineOffset();
         }
         return EOF_CHAR;
       }
@@ -363,7 +362,7 @@ class JsDocTokenStream {
       }
 
       if (charno == -1) {
-        charno = getOffset();
+        charno = getLineOffset();
       }
 
       return c;
@@ -375,7 +374,7 @@ class JsDocTokenStream {
       cursor++;
       --ungetCursor;
       if (charno == -1) {
-        charno = getOffset();
+        charno = getLineOffset();
       }
       return ungetBuffer[ungetCursor];
     }
@@ -384,7 +383,7 @@ class JsDocTokenStream {
       int c;
       if (sourceCursor == sourceEnd) {
         if (charno == -1) {
-          charno = getOffset();
+          charno = getLineOffset();
         }
         return EOF_CHAR;
       }
@@ -408,7 +407,7 @@ class JsDocTokenStream {
       }
 
       if (charno == -1) {
-        charno = getOffset();
+        charno = getLineOffset();
       }
 
       return c;
@@ -429,11 +428,13 @@ class JsDocTokenStream {
     cursor--;
   }
 
-  /**
-   * Returns the offset into the current line.
-   */
-  final int getOffset() {
+  /** Returns the offset into the current line. */
+  private final int getLineOffset() {
     return sourceCursor - lineStart - ungetCursor - 1;
+  }
+
+  public final int getCursor() {
+    return this.cursor;
   }
 
   // Set this to an initial non-null value so that the Parser has
@@ -451,7 +452,7 @@ class JsDocTokenStream {
 
   private int lineStart = 0;
   private int lineEndChar = -1;
-  int lineno;
+  private int lineno;
   private int charno = -1;
   private final int initCharno;
   private final int initLineno;
@@ -461,10 +462,10 @@ class JsDocTokenStream {
 
   // sourceCursor is an index into a small buffer that keeps a
   // sliding window of the source stream.
-  int sourceCursor;
+  private int sourceCursor;
 
   // cursor is a monotonically increasing index into the original
   // source stream, tracking exactly how far scanning has progressed.
   // Its value is the index of the next character to be scanned.
-  int cursor;
+  private int cursor;
 }

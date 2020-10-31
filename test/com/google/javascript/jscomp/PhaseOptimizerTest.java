@@ -39,12 +39,10 @@ import org.junit.runners.JUnit4;
 /**
  * Tests for {@link PhaseOptimizer}.
  *
- * @author nicksantos@google.com (Nick Santos)
  */
 @RunWith(JUnit4.class)
 public final class PhaseOptimizerTest {
   private final List<String> passesRun = new ArrayList<>();
-  private Node dummyExternsRoot;
   private Node dummyRoot;
   Node dummyScript;
   private PhaseOptimizer optimizer;
@@ -54,12 +52,12 @@ public final class PhaseOptimizerTest {
   @Before
   public void setUp() {
     passesRun.clear();
-    dummyExternsRoot = new Node(Token.ROOT);
+    Node dummyExternsRoot = new Node(Token.ROOT);
     dummyScript = IR.script();
     dummyRoot = IR.root(dummyScript);
     compiler = new Compiler();
     compiler.initCompilerOptionsIfTesting();
-    tracker = new PerformanceTracker(dummyExternsRoot, dummyRoot, TracerMode.TIMING_ONLY, null);
+    tracker = new PerformanceTracker(dummyExternsRoot, dummyRoot, TracerMode.TIMING_ONLY);
     optimizer = new PhaseOptimizer(compiler, tracker);
     compiler.setPhaseOptimizer(optimizer);
   }
@@ -226,8 +224,9 @@ public final class PhaseOptimizerTest {
 
     assertPasses();
 
-    assertThat(compiler.getWarnings())
-        .comparingElementsUsing(new DiagnosticCorrespondence())
+    // Error will be converted to warning by a `WarningsGuard`.
+    assertThat(compiler.getErrors())
+        .comparingElementsUsing(DIAGNOSTIC_CORRESPONDENCE)
         .containsExactly(FEATURES_NOT_SUPPORTED_BY_PASS);
   }
 
@@ -239,7 +238,7 @@ public final class PhaseOptimizerTest {
     assertPasses("testPassFactory");
 
     assertThat(compiler.getErrors())
-        .comparingElementsUsing(new DiagnosticCorrespondence())
+        .comparingElementsUsing(DIAGNOSTIC_CORRESPONDENCE)
         .containsExactly(FEATURES_NOT_SUPPORTED_BY_PASS);
   }
 
@@ -277,17 +276,12 @@ public final class PhaseOptimizerTest {
 
   private PassFactory createPassFactory(
       String name, final CompilerPass pass, boolean isOneTime, FeatureSet featureSet) {
-    return new PassFactory(name, isOneTime) {
-      @Override
-      protected CompilerPass create(AbstractCompiler compiler) {
-        return pass;
-      }
-
-      @Override
-      public FeatureSet featureSet() {
-        return featureSet;
-      }
-    };
+    return PassFactory.builder()
+        .setName(name)
+        .setRunInFixedPointLoop(!isOneTime)
+        .setInternalFactory((compiler) -> pass)
+        .setFeatureSet(featureSet)
+        .build();
   }
 
   private CompilerPass createPass(final String name, int numChanges) {
@@ -304,15 +298,7 @@ public final class PhaseOptimizerTest {
     };
   }
 
-  private static class DiagnosticCorrespondence extends Correspondence<JSError, DiagnosticType> {
-    @Override
-    public boolean compare(JSError actual, DiagnosticType expected) {
-      return actual.getType().equals(expected);
-    }
-
-    @Override
-    public String toString() {
-      return "has diagnostic";
-    }
-  }
+  private static final Correspondence<JSError, DiagnosticType> DIAGNOSTIC_CORRESPONDENCE =
+      Correspondence.from(
+          (actual, expected) -> actual.getType().equals(expected), "has diagnostic");
 }

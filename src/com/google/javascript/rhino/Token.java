@@ -78,8 +78,15 @@ public enum Token {
   GETPROP,
   GETELEM,
   CALL,
+
+  // Part of optional chain (?.)
+  OPTCHAIN_GETPROP,
+  OPTCHAIN_GETELEM,
+  OPTCHAIN_CALL,
+
   NAME,
   NUMBER,
+  BIGINT,
   STRING,
   NULL,
   THIS,
@@ -115,6 +122,7 @@ public enum Token {
   HOOK, // conditional (?:)
   OR, // logical or (||)
   AND, // logical and (&&)
+  COALESCE, // Nullish coalesce (??)
   INC, // increment (++)
   DEC, // decrement (--)
   FUNCTION, // function keyword
@@ -181,18 +189,21 @@ public enum Token {
   MODULE_BODY,
   DYNAMIC_IMPORT,
 
-  REST, // "..." in formal parameters, or an array pattern.
-  SPREAD, // "..." in a call expression, or an array literal.
+  ITER_REST, // Rests that use the iterator protocol.
+  OBJECT_REST, // Rests that get object properties.
+  ITER_SPREAD, // Spreads that use the iterator protocol.
+  OBJECT_SPREAD, // Spreads that get object properties.
 
   COMPUTED_PROP,
 
   TAGGED_TEMPLATELIT, // tagged template literal, e.g. foo`bar`
-  TEMPLATELIT, // template literal
+  TEMPLATELIT, // template literal, e.g: `bar`
   TEMPLATELIT_SUB, // template literal substitution
   TEMPLATELIT_STRING, // template literal string
 
   DEFAULT_VALUE, // Formal parameter or destructuring element with a default value
   NEW_TARGET, // new.target
+  IMPORT_META, // import.meta
 
   // Used by type declaration ASTs
   STRING_TYPE,
@@ -219,7 +230,6 @@ public enum Token {
   STAR,
   EOC,
   QMARK, // type is nullable or unknown
-  ELLIPSIS,
   BANG,
   EQUALS,
   LB, // left brackets
@@ -257,11 +267,11 @@ public enum Token {
       case ROOT:
       case BREAK:
       case CALL:
+      case OPTCHAIN_CALL:
       case COLON:
       case CONST:
       case CONTINUE:
       case DEBUGGER:
-      case ELLIPSIS:
       case EOC:
       case EQUALS:
       case FOR:
@@ -292,11 +302,13 @@ public enum Token {
       case NAME:
       case NULL:
       case NUMBER:
+      case BIGINT:
       case STRING:
       case TEMPLATELIT_STRING:
       case THIS:
       case TRUE:
         return 0;
+      case AWAIT:
       case BITNOT:
       case CALL_SIGNATURE:
       case CAST:
@@ -307,14 +319,16 @@ public enum Token {
       case GETTER_DEF:
       case INC:
       case INDEX_SIGNATURE:
+      case ITER_REST:
+      case ITER_SPREAD:
       case MEMBER_FUNCTION_DEF:
       case NAMED_TYPE:
       case NEG:
       case NOT:
+      case OBJECT_REST:
+      case OBJECT_SPREAD:
       case POS:
-      case REST:
       case SETTER_DEF:
-      case SPREAD:
       case TEMPLATELIT_SUB:
       case THROW:
       case TYPEOF:
@@ -340,6 +354,7 @@ public enum Token {
       case BITOR:
       case BITXOR:
       case CASE:
+      case COALESCE:
       case CATCH:
       case COMMA:
       case COMPUTED_PROP:
@@ -352,6 +367,8 @@ public enum Token {
       case GE:
       case GETELEM:
       case GETPROP:
+      case OPTCHAIN_GETELEM:
+      case OPTCHAIN_GETPROP:
       case GT:
       case IN:
       case INSTANCEOF:

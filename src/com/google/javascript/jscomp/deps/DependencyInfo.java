@@ -17,13 +17,13 @@
 package com.google.javascript.jscomp.deps;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.Streams.stream;
 
 import com.google.auto.value.AutoValue;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
-import com.google.common.collect.Streams;
 import com.google.errorprone.annotations.Immutable;
 import java.io.IOException;
 import java.io.Serializable;
@@ -34,8 +34,6 @@ import java.util.Map;
 
 /**
  * A data structure for JS dependency information for a single .js file.
- *
- * @author agrieve@google.com (Andrew Grieve)
  */
 public interface DependencyInfo extends Serializable {
 
@@ -59,7 +57,7 @@ public interface DependencyInfo extends Serializable {
     }
 
     public static ImmutableList<String> asSymbolList(Iterable<Require> requires) {
-      return Streams.stream(requires).map(Require::getSymbol).collect(toImmutableList());
+      return stream(requires).map(Require::getSymbol).collect(toImmutableList());
     }
 
     public static Require googRequireSymbol(String symbol) {

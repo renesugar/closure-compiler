@@ -18,6 +18,7 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.common.truth.Truth8.assertThat;
 import static java.util.Collections.shuffle;
 import static org.junit.Assert.fail;
 
@@ -116,7 +117,7 @@ public final class JSModuleGraphTest {
             new JSModule[] {moduleA, moduleB, moduleC, moduleD, moduleE, moduleF, weakModule});
 
     assertThat(graph.getModuleCount()).isEqualTo(7);
-    assertThat(graph.getModuleByName(JSModule.WEAK_MODULE_NAME)).isSameAs(weakModule);
+    assertThat(graph.getModuleByName(JSModule.WEAK_MODULE_NAME)).isSameInstanceAs(weakModule);
   }
 
   @Test
@@ -163,7 +164,7 @@ public final class JSModuleGraphTest {
     } catch (IllegalStateException e) {
       assertThat(e)
           .hasMessageThat()
-          .isEqualTo("A weak module already exists but weak sources were found in other modules.");
+          .contains("Found these weak sources in other modules:\n  a (in module moduleA)");
     }
   }
 
@@ -188,7 +189,7 @@ public final class JSModuleGraphTest {
     } catch (IllegalStateException e) {
       assertThat(e)
           .hasMessageThat()
-          .isEqualTo("A weak module already exists but strong sources were found in it.");
+          .contains("Found these strong sources in the weak module:\n  a");
     }
   }
 
@@ -342,7 +343,7 @@ public final class JSModuleGraphTest {
     makeGraph();
     setUpManageDependenciesTest();
     DependencyOptions depOptions = DependencyOptions.pruneLegacyForEntryPoints(ImmutableList.of());
-    List<CompilerInput> results = graph.manageDependencies(depOptions);
+    List<CompilerInput> results = graph.manageDependencies(compiler, depOptions);
 
     assertInputs(moduleA, "a1", "a3");
     assertInputs(moduleB, "a2", "b2");
@@ -361,7 +362,7 @@ public final class JSModuleGraphTest {
     DependencyOptions depOptions =
         DependencyOptions.pruneLegacyForEntryPoints(
             ImmutableList.of(ModuleIdentifier.forClosure("c2")));
-    List<CompilerInput> results = graph.manageDependencies(depOptions);
+    List<CompilerInput> results = graph.manageDependencies(compiler, depOptions);
 
     assertInputs(moduleA, "a1", "a3");
     assertInputs(moduleB, "a2", "b2");
@@ -379,7 +380,7 @@ public final class JSModuleGraphTest {
     setUpManageDependenciesTest();
     DependencyOptions depOptions =
         DependencyOptions.pruneForEntryPoints(ImmutableList.of(ModuleIdentifier.forClosure("c2")));
-    List<CompilerInput> results = graph.manageDependencies(depOptions);
+    List<CompilerInput> results = graph.manageDependencies(compiler, depOptions);
 
     // Everything gets pushed up into module c, because that's
     // the only one that has entry points.
@@ -392,11 +393,37 @@ public final class JSModuleGraphTest {
   }
 
   @Test
+  public void testManageDependenciesStrictWithEntryPointWithDuplicates() throws Exception {
+    final JSModule a = new JSModule("a");
+    JSModuleGraph graph = new JSModuleGraph(new JSModule[] {a});
+
+    // Create all the input files.
+    List<CompilerInput> inputs = new ArrayList<>();
+    a.add(code("a1", provides("a1"), requires("a2")));
+    a.add(code("a2", provides("a2"), requires()));
+    a.add(code("a3", provides("a2"), requires()));
+    inputs.addAll(a.getInputs());
+    for (CompilerInput input : inputs) {
+      input.setCompiler(compiler);
+    }
+
+    DependencyOptions depOptions =
+        DependencyOptions.pruneForEntryPoints(ImmutableList.of(ModuleIdentifier.forClosure("a1")));
+    List<CompilerInput> results = graph.manageDependencies(compiler, depOptions);
+
+    // Everything gets pushed up into module c, because that's
+    // the only one that has entry points.
+    assertInputs(a, "a2", "a3", "a1");
+
+    assertThat(sourceNames(results)).containsExactly("a2", "a3", "a1").inOrder();
+  }
+
+  @Test
   public void testManageDependenciesSortOnly() throws Exception {
     makeDeps();
     makeGraph();
     setUpManageDependenciesTest();
-    List<CompilerInput> results = graph.manageDependencies(DependencyOptions.sortOnly());
+    List<CompilerInput> results = graph.manageDependencies(compiler, DependencyOptions.sortOnly());
 
     assertInputs(moduleA, "a1", "a2", "a3");
     assertInputs(moduleB, "b1", "b2");
@@ -423,7 +450,7 @@ public final class JSModuleGraphTest {
       input.setCompiler(compiler);
     }
 
-    List<CompilerInput> results = graph.manageDependencies(DependencyOptions.sortOnly());
+    List<CompilerInput> results = graph.manageDependencies(compiler, DependencyOptions.sortOnly());
 
     assertInputs(moduleA, "base.js", "a1", "a2");
 
@@ -434,7 +461,7 @@ public final class JSModuleGraphTest {
   public void testNoFiles() throws Exception {
     makeDeps();
     makeGraph();
-    List<CompilerInput> results = graph.manageDependencies(DependencyOptions.sortOnly());
+    List<CompilerInput> results = graph.manageDependencies(compiler, DependencyOptions.sortOnly());
     assertThat(results).isEmpty();
   }
 
@@ -443,7 +470,7 @@ public final class JSModuleGraphTest {
     makeDeps();
     makeGraph();
     JsonArray modules = graph.toJson();
-    assertThat(modules.size()).isEqualTo(7);
+    assertThat(modules).hasSize(7);
     for (int i = 0; i < modules.size(); i++) {
       JsonObject m = modules.get(i).getAsJsonObject();
       assertThat(m.get("name")).isNotNull();
@@ -454,7 +481,7 @@ public final class JSModuleGraphTest {
     JsonObject m = modules.get(3).getAsJsonObject();
     assertThat(m.get("name").getAsString()).isEqualTo("moduleD");
     assertThat(m.get("dependencies").getAsJsonArray().toString()).isEqualTo("[\"moduleB\"]");
-    assertThat(m.get("transitive-dependencies").getAsJsonArray().size()).isEqualTo(2);
+    assertThat(m.get("transitive-dependencies").getAsJsonArray()).hasSize(2);
     assertThat(m.get("inputs").getAsJsonArray().toString()).isEqualTo("[]");
   }
 
@@ -515,7 +542,7 @@ public final class JSModuleGraphTest {
         input.setCompiler(compiler);
       }
 
-      List<CompilerInput> results = graph.manageDependencies(depOptions);
+      List<CompilerInput> results = graph.manageDependencies(compiler, depOptions);
 
       assertInputs(moduleA, "base.js", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a1");
 
@@ -573,7 +600,7 @@ public final class JSModuleGraphTest {
         input.setHasFullParseDependencyInfo(true);
       }
 
-      List<CompilerInput> results = graph.manageDependencies(depOptions);
+      List<CompilerInput> results = graph.manageDependencies(compiler, depOptions);
 
       assertInputs(
           moduleA,
@@ -612,13 +639,9 @@ public final class JSModuleGraphTest {
 
     makeGraph();
 
-    assertThat(
-            getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
-                .collect(Collectors.toList()))
+    assertThat(getWeakModule().getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(weak1, weak2);
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong1, strong2);
   }
 
@@ -641,15 +664,11 @@ public final class JSModuleGraphTest {
     }
 
     makeGraph();
-    graph.manageDependencies(DependencyOptions.sortOnly());
+    graph.manageDependencies(compiler, DependencyOptions.sortOnly());
 
-    assertThat(
-            getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
-                .collect(Collectors.toList()))
+    assertThat(getWeakModule().getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(weak1, weak2);
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong1, strong2);
   }
 
@@ -673,17 +692,17 @@ public final class JSModuleGraphTest {
 
     makeGraph();
     graph.manageDependencies(
+        compiler,
         DependencyOptions.pruneForEntryPoints(
             ImmutableList.of(
                 ModuleIdentifier.forFile("strong1"), ModuleIdentifier.forFile("strong2"))));
 
     assertThat(
             getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
+                .map(CompilerInput::getSourceFile)
                 .collect(Collectors.toList()))
         .isEmpty();
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong1, strong2);
   }
 
@@ -715,17 +734,17 @@ public final class JSModuleGraphTest {
 
     makeGraph();
     graph.manageDependencies(
+        compiler,
         DependencyOptions.pruneForEntryPoints(
             ImmutableList.of(
                 ModuleIdentifier.forFile("strong1"), ModuleIdentifier.forFile("strong2"))));
 
     assertThat(
             getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
+                .map(CompilerInput::getSourceFile)
                 .collect(Collectors.toList()))
         .isEmpty();
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong1, strong2);
   }
 
@@ -747,16 +766,13 @@ public final class JSModuleGraphTest {
 
     makeGraph();
     graph.manageDependencies(
+        compiler,
         DependencyOptions.pruneLegacyForEntryPoints(
             ImmutableList.of(ModuleIdentifier.forFile("strong"))));
 
-    assertThat(
-            getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
-                .collect(Collectors.toList()))
+    assertThat(getWeakModule().getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(weak);
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong, moocher);
   }
 
@@ -779,11 +795,10 @@ public final class JSModuleGraphTest {
     }
 
     makeGraph();
-    graph.manageDependencies(DependencyOptions.sortOnly());
+    graph.manageDependencies(compiler, DependencyOptions.sortOnly());
 
     assertThat(getWeakModule().getInputs()).isEmpty();
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(weak1, strong1, weak2, strong2);
   }
 
@@ -807,17 +822,14 @@ public final class JSModuleGraphTest {
 
     makeGraph();
     graph.manageDependencies(
+        compiler,
         DependencyOptions.pruneForEntryPoints(
             ImmutableList.of(
                 ModuleIdentifier.forFile("strong1"), ModuleIdentifier.forFile("strong2"))));
 
-    assertThat(
-            getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
-                .collect(Collectors.toList()))
+    assertThat(getWeakModule().getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(weak1, weak2);
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong1, strong2);
   }
 
@@ -847,16 +859,13 @@ public final class JSModuleGraphTest {
 
     makeGraph();
     graph.manageDependencies(
+        compiler,
         DependencyOptions.pruneForEntryPoints(
             ImmutableList.of(ModuleIdentifier.forFile("strong1"))));
 
-    assertThat(
-            getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
-                .collect(Collectors.toList()))
+    assertThat(getWeakModule().getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(weak1, weak2, weak3, strongFromWeak);
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong1);
   }
 

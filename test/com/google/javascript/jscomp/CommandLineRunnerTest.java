@@ -19,7 +19,10 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.javascript.jscomp.CompilerTestCase.lines;
 import static com.google.javascript.jscomp.testing.JSErrorSubject.assertError;
+import static com.google.javascript.rhino.testing.Asserts.assertThrows;
+import static com.google.javascript.rhino.testing.NodeSubject.assertNode;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -27,13 +30,15 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Supplier;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.io.Files;
 import com.google.javascript.jscomp.AbstractCommandLineRunner.FlagEntry;
 import com.google.javascript.jscomp.AbstractCommandLineRunner.JsSourceType;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.SourceMap.LocationMapping;
+import com.google.javascript.jscomp.testing.JSChunkGraphBuilder;
+import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import com.google.javascript.rhino.Node;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -41,7 +46,10 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -51,14 +59,14 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.Before;
 import org.junit.Ignore;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
 /**
  * Tests for {@link CommandLineRunner}.
- *
- * @author nicksantos@google.com (Nick Santos)
  */
 @RunWith(JUnit4.class)
 public final class CommandLineRunnerTest {
@@ -486,6 +494,97 @@ public final class CommandLineRunnerTest {
   }
 
   @Test
+  public void googFeatureSetYearIsNotDefinedWhenBrowserFeaturesetYearFlagIsNotSupplied() {
+    testSame("var x = 3"); // input does not matter
+    assertThat(lastCompiler.options.getDefineReplacements())
+        .doesNotContainKey("goog.FEATURESET_YEAR");
+  }
+
+  /** Test that browser_featureset_year flag overrides the default goog.FEATURESET_YEAR define */
+  @Test
+  public void browserFeaturesetYearFlagDefinesGoogFeaturesetYear() {
+    args.add("--browser_featureset_year=2019");
+    String original =
+        lines(
+            "/** @define {number} */", //
+            "goog.FEATURESET_YEAR = goog.define('goog.FEATURESET_YEAR', 2012);");
+    String expected = "goog.FEATURESET_YEAR=2019";
+    test(original, expected);
+    assertThat(lastCompiler.options.getDefineReplacements()).containsKey("goog.FEATURESET_YEAR");
+    Node n = lastCompiler.options.getDefineReplacements().get("goog.FEATURESET_YEAR");
+    assertThat(n.getDouble()).isEqualTo(2019.0);
+  }
+
+  /** Minimum valid browser featureset year is 2012 */
+  @Test
+  public void invalidBrowserFeaturesetYearFlagGeneratesError1() {
+    args.add("--browser_featureset_year=2011");
+    FlagUsageException e = assertThrows(FlagUsageException.class, () -> compile("", args));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo(
+            "Illegal browser_featureset_year=2011. We support values 2012, 2019, and 2020 only");
+  }
+
+  /** Giving a browser featureset year between 2012 and 2019 reports error */
+  @Test
+  public void invalidBrowserFeaturesetYearFlagGeneratesError2() {
+    args.add("--browser_featureset_year=2015");
+    FlagUsageException e = assertThrows(FlagUsageException.class, () -> compile("", args));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo(
+            "Illegal browser_featureset_year=2015. We support values 2012, 2019, and 2020 only");
+  }
+
+  /** Giving a future year as the browser featureset year reports error */
+  @Test
+  public void invalidBrowserFeaturesetYearFlagGeneratesError3() {
+    int currentYear = Calendar.getInstance().get(Calendar.YEAR);
+    int higherThanCurrentYear = currentYear + 1;
+    args.add("--browser_featureset_year=" + higherThanCurrentYear);
+    FlagUsageException e = assertThrows(FlagUsageException.class, () -> compile("", args));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo(
+            "Illegal browser_featureset_year="
+                + higherThanCurrentYear
+                + ". We support values 2012, 2019, and 2020 only");
+  }
+
+  /** Check that --browser_featureset_year = 2012 correctly sets the language out */
+  @Test
+  public void browserFeatureSetYearSetsLanguageOut1() {
+    args.add("--browser_featureset_year=2012");
+    String original =
+        lines(
+            "/** @define {number} */", //
+            "goog.FEATURESET_YEAR = goog.define('goog.FEATURESET_YEAR', 2012);");
+    String expected = "goog.FEATURESET_YEAR=2012";
+    test(original, expected);
+    /* Browser's year is not expected to match output language's year
+    Flag value --browser_featureset_year=2012 corresponds to output ECMASCRIPT5_STRICT */
+    assertThat(lastCompiler.options.getOutputFeatureSet())
+        .isEqualTo(LanguageMode.ECMASCRIPT5_STRICT.toFeatureSet());
+  }
+
+  /** Check that --browser_featureset_year = 2019 correctly sets the language out */
+  @Test
+  public void browserFeatureSetYearSetsLanguageOut2() {
+    args.add("--browser_featureset_year=2019");
+    String original =
+        lines(
+            "/** @define {number} */", //
+            "goog.FEATURESET_YEAR = goog.define('goog.FEATURESET_YEAR', 2012);");
+    String expected = "goog.FEATURESET_YEAR=2019";
+    test(original, expected);
+    /* Browser's year is not expected to match output language's year
+    Flag value --browser_featureset_year=2019 corresponds to output ECMASCRIPT_2017 */
+    assertThat(lastCompiler.getOptions().getOutputFeatureSet())
+        .isEqualTo(LanguageMode.ECMASCRIPT_2017.toFeatureSet());
+  }
+
+  @Test
   public void testScriptStrictModeNoWarning() {
     test("'use strict';", "");
     test("'no use strict';", CheckSideEffects.USELESS_CODE_ERROR);
@@ -702,10 +801,9 @@ public final class CommandLineRunnerTest {
     args.add("--compilation_level=ADVANCED_OPTIMIZATIONS");
     args.add("--warning_level=QUIET");
     args.add("--debug=true");
-    test("function Foo() {}" +
-        "Foo.x = 1;" +
-        "function f() {throw new Foo().x;} f();",
-        "throw (new function Foo() {}).$x$;");
+    test(
+        "function Foo() {}" + "Foo.x = 1;" + "function f() {throw new Foo().x;} f();",
+        "throw (new function() {}).$x$;");
   }
 
   @Test
@@ -830,26 +928,28 @@ public final class CommandLineRunnerTest {
   public void testSourceSortingCircularDeps1() {
     args.add("--dependency_mode=PRUNE_LEGACY");
     args.add("--language_in=ECMASCRIPT5");
-    test(new String[] {
+    test(
+        new String[] {
           "goog.provide('gin'); goog.require('tonic'); var gin = {};",
           "goog.provide('tonic'); goog.require('gin'); var tonic = {};",
           "goog.require('gin'); goog.require('tonic');"
-         },
-         ProcessClosurePrimitives.LATE_PROVIDE_ERROR);
+        },
+        CheckClosureImports.LATE_PROVIDE_ERROR);
   }
 
   @Test
   public void testSourceSortingCircularDeps2() {
     args.add("--dependency_mode=PRUNE_LEGACY");
     args.add("--language_in=ECMASCRIPT5");
-    test(new String[] {
+    test(
+        new String[] {
           "goog.provide('roses.lime.juice');",
           "goog.provide('gin'); goog.require('tonic'); var gin = {};",
           "goog.provide('tonic'); goog.require('gin'); var tonic = {};",
           "goog.require('gin'); goog.require('tonic');",
           "goog.provide('gimlet'); goog.require('gin'); goog.require('roses.lime.juice');"
-         },
-         ProcessClosurePrimitives.LATE_PROVIDE_ERROR);
+        },
+        CheckClosureImports.LATE_PROVIDE_ERROR);
   }
 
   @Test
@@ -949,14 +1049,20 @@ public final class CommandLineRunnerTest {
     args.add("--dependency_mode=PRUNE");
     args.add("--entry_point=goog:scotch");
     args.add("--warning_level=VERBOSE");
-    test(new String[] {
-          "/** @externs */\n" +
-          "var externVar;",
-          "goog.provide('scotch'); var x = externVar;"
-         },
-         new String[] {
-           "var scotch = {}, x = externVar;",
-         });
+    test(
+        new String[] {
+          lines(
+              "/** @externs */", //
+              "var externVar;"),
+          lines(
+              "/** @const */", //
+              "var goog = {};",
+              "goog.provide('scotch');",
+              "var x = externVar;")
+        },
+        new String[] {
+          "var goog = {}, scotch = {}, x = externVar;",
+        });
   }
 
   @Test
@@ -1014,21 +1120,21 @@ public final class CommandLineRunnerTest {
     args.add("--warning_level=VERBOSE");
     test(
         new String[] {
+          "/** @const */ var goog = {};",
           "goog.require('beer');",
           "goog.provide('beer'); /** @param {Scotch} x */ function f(x) {}",
           "goog.provide('Scotch'); var x = 3;"
         },
-        new String[] {"var beer = {}; function f(a) {}", ""});
+        new String[] {"/** @const */ var goog = {};", "var beer = {}; function f(a) {}", ""});
 
-    test(new String[] {
+    test(
+        new String[] {
+          "/** @const */ var goog = {};",
           "goog.require('beer');",
           "goog.provide('beer'); /** @param {Scotch} x */ function f(x) {}"
-         },
-         new String[] {
-           "var beer = {}; function f(a) {}",
-           ""
-         },
-         RhinoErrorReporter.UNRECOGNIZED_TYPE_ERROR);
+        },
+        new String[] {"var goog = {};", "var beer = {}; function f(a) {}", ""},
+        RhinoErrorReporter.UNRECOGNIZED_TYPE_ERROR);
   }
 
   @Test
@@ -1191,30 +1297,6 @@ public final class CommandLineRunnerTest {
 
     compileFiles(
         "console.log(\"Hello World\");window.alert(\"Hi Browser\");", zipFile1, zipFile2);
-  }
-
-  @Test
-  public void testInputMultipleDuplicateZips() throws IOException {
-    args.add("--jscomp_error=duplicateZipContents");
-    FlagEntry<JsSourceType> zipFile1 =
-        createZipFile(ImmutableMap.of("run.js", "console.log(\"Hello World\");"));
-
-    FlagEntry<JsSourceType> zipFile2 =
-        createZipFile(ImmutableMap.of("run.js", "console.log(\"Hello World\");"));
-
-    compileFiles("console.log(\"Hello World\");", zipFile1, zipFile2);
-  }
-
-  @Test
-  public void testInputMultipleConflictingZips() throws IOException {
-    FlagEntry<JsSourceType> zipFile1 =
-        createZipFile(ImmutableMap.of("run.js", "console.log(\"Hello World\");"));
-
-    FlagEntry<JsSourceType> zipFile2 =
-        createZipFile(ImmutableMap.of("run.js", "window.alert(\"Hi Browser\");"));
-
-    compileFilesError(
-        AbstractCommandLineRunner.CONFLICTING_DUPLICATE_ZIP_CONTENTS, zipFile1, zipFile2);
   }
 
   @Test
@@ -1406,6 +1488,15 @@ public final class CommandLineRunnerTest {
   }
 
   @Test
+  public void testSymlink() throws IOException {
+    FlagEntry<JsSourceType> jsFile1 = createJsFile("test1", "var a;");
+    Path symlink1 = Files.createTempDir().toPath().resolve("symlink1");
+    Path jscompTempDir = Paths.get(jsFile1.getValue()).getParent();
+    java.nio.file.Files.createSymbolicLink(symlink1, jscompTempDir);
+    compileFiles("var a;", new FlagEntry<>(JsSourceType.JS, symlink1.toString()));
+  }
+
+  @Test
   public void testSourceMapInputs() {
     args.add("--js_output_file");
     args.add("/path/to/out.js");
@@ -1432,9 +1523,9 @@ public final class CommandLineRunnerTest {
     });
 
     StringBuilder builder = new StringBuilder();
-    lastCommandLineRunner.writeModuleOutput(
-        builder,
-        lastCompiler.getModuleGraph().getRootModule());
+    JSModule module = lastCompiler.getModuleGraph().getRootModule();
+    String filename = lastCommandLineRunner.getModuleOutputFileName(module);
+    lastCommandLineRunner.writeModuleOutput(filename, builder, module);
     assertThat(builder.toString()).isEqualTo("var x=3; // m0.js\n");
   }
 
@@ -1448,9 +1539,9 @@ public final class CommandLineRunnerTest {
     });
 
     StringBuilder builder = new StringBuilder();
-    lastCommandLineRunner.writeModuleOutput(
-        builder,
-        lastCompiler.getModuleGraph().getRootModule());
+    JSModule module = lastCompiler.getModuleGraph().getRootModule();
+    String filename = lastCommandLineRunner.getModuleOutputFileName(module);
+    lastCommandLineRunner.writeModuleOutput(filename, builder, module);
     assertThat(builder.toString()).isEqualTo("var x=3;\n//# SourceMappingUrl=m0.js.map\n");
   }
 
@@ -1555,27 +1646,29 @@ public final class CommandLineRunnerTest {
   }
 
   @Test
-  public void testVersionFlag() {
+  public void testVersionFlag_firstArg() throws Exception {
     args.add("--version");
-    CommandLineRunner runner =
-        createCommandLineRunner(new String[] {"function f() {}"});
-    assertThat(runner.shouldRunCompiler()).isFalse();
+    CommandLineRunner runner = createCommandLineRunner(new String[] {"function f() {}"});
+    assertThat(runner.shouldRunCompiler()).isTrue();
     assertThat(runner.hasErrors()).isFalse();
-    assertThat(
-        new String(outReader.toByteArray(), UTF_8)
-            .indexOf("Closure Compiler (http://github.com/google/closure-compiler)\n"
-                + "Version: ")).isEqualTo(0);
+
+    runner.doRun();
+
+    assertThat(new String(outReader.toByteArray(), UTF_8))
+        .isEqualTo(runner.getVersionText() + "\n");
   }
 
   @Test
-  public void testVersionFlag2() {
+  public void testVersionFlag_lastArg() throws Exception {
     lastArg = "--version";
-    CommandLineRunner runner =
-        createCommandLineRunner(new String[] {"function f() {}"});
-    assertThat(runner.shouldRunCompiler()).isFalse();
+    CommandLineRunner runner = createCommandLineRunner(new String[] {"function f() {}"});
+    assertThat(runner.shouldRunCompiler()).isTrue();
     assertThat(runner.hasErrors()).isFalse();
+
+    runner.doRun();
+
     assertThat(new String(outReader.toByteArray(), UTF_8))
-        .startsWith("Closure Compiler (http://github.com/google/closure-compiler)\nVersion: ");
+        .isEqualTo(runner.getVersionText() + "\n");
   }
 
   @Test
@@ -1815,6 +1908,23 @@ public final class CommandLineRunnerTest {
     test("exports.test = 1", "var module$foo$bar={default: {}}; module$foo$bar.default.test = 1;");
     // With modules=auto no direct output is created.
     assertThat(outReader.toString()).isEmpty();
+  }
+
+  @Test
+  public void testSimpleJsonFileInclusionCompiles() {
+    args.add("--module_resolution=NODE");
+    args.add("--compilation_level=ADVANCED");
+    setFilename(0, "index.js");
+    setFilename(1, "package.json");
+    test(
+        new String[] {
+          lines("const /** string */ typeError = 0;"),
+          lines(
+              "{", //
+              "  \"name\": \"test\"",
+              "}")
+        },
+        TypeValidator.TYPE_MISMATCH_WARNING);
   }
 
   /**
@@ -2282,14 +2392,17 @@ public final class CommandLineRunnerTest {
     String output = new String(outReader.toByteArray(), UTF_8);
     assertThat(output)
         .isEqualTo(
-            "[{"
-                + "\"src\":\"function log(a){console.log(a)}log(\\\"one.js\\\");\\n\","
-                + "\"path\":\"bar.js\","
-                + "\"source_map\":\"{\\n\\\"version\\\":3,\\n\\\"file\\\":\\\"bar.js\\\",\\n"
-                + "\\\"lineCount\\\":1,\\n\\\"mappings\\\":\\\"AAAAA,QAASA,IAAG,CAACC,CAAD,CAAI,CACdC,"
-                + "OAAAA,IAAAA,CAAYD,CAAZC,CADc,CAGhBF,GAAAA,CAAI,QAAJA;\\\",\\n"
+            "[{\"src\":\"function log(a){console.log(a)}log(\\\"one.js\\\");\\n"
+                + "\",\"path\":\"bar.js\",\"source_map\":\"{\\n"
+                + "\\\"version\\\":3,\\n"
+                + "\\\"file\\\":\\\"bar.js\\\",\\n"
+                + "\\\"lineCount\\\":1,\\n"
+                + "\\\"mappings\\\":\\\"AAAAA,QAASA,IAAG,CAACC,CAAD,CAAI,CACdC,"
+                + "OAAAA,CAAAF,GAAAE,CAAYD,CAAZC,CADc,CAGhBF,GAAAA,CAAI,QAAJA;\\\",\\n"
                 + "\\\"sources\\\":[\\\"one.js\\\"],\\n"
-                + "\\\"names\\\":[\\\"log\\\",\\\"a\\\",\\\"console\\\"]\\n}\\n\"}]");
+                + "\\\"names\\\":[\\\"log\\\",\\\"a\\\",\\\"console\\\"]\\n"
+                + "}\\n"
+                + "\"}]");
   }
 
   @Test
@@ -2315,15 +2428,16 @@ public final class CommandLineRunnerTest {
     String output = new String(outReader.toByteArray(), UTF_8);
     assertThat(output)
         .isEqualTo(
-            "[{\"src\":\"alert(\\\"foo\\\");\\n\","
-                + "\"path\":\"./foo/bar/baz.js\",\"source_map\":\"{\\n\\\"version\\\":3,"
-                + "\\n\\\"file\\\":\\\"./foo/bar/baz.js\\\",\\n\\\"lineCount\\\":1,"
-                + "\\n\\\"mappings\\\":\\\"AAAAA,KAAA,CAAM,KAAN;\\\","
-                + "\\n\\\"sources\\\":[\\\"foo.js\\\"],\\n\\\"names\\\":[\\\"alert\\\"]\\n}\\n\"},"
-                + "{\"src\":\"\\n\",\"path\":\"./$weak$.js\",\"source_map\":"
-                + "\"{\\n\\\"version\\\":3,\\n\\\"file\\\":\\\"./$weak$.js\\\","
-                + "\\n\\\"lineCount\\\":1,\\n\\\"mappings\\\":\\\";\\\",\\n\\\"sources\\\":[],"
-                + "\\n\\\"names\\\":[]\\n}\\n\"}]");
+            "[{\"src\":\"alert(\\\"foo\\\");\\n"
+                + "\",\"path\":\"./foo/bar/baz.js\",\"source_map\":\"{\\n"
+                + "\\\"version\\\":3,\\n"
+                + "\\\"file\\\":\\\"./foo/bar/baz.js\\\",\\n"
+                + "\\\"lineCount\\\":1,\\n"
+                + "\\\"mappings\\\":\\\"AAAAA,KAAA,CAAM,KAAN;\\\",\\n"
+                + "\\\"sources\\\":[\\\"foo.js\\\"],\\n"
+                + "\\\"names\\\":[\\\"alert\\\"]\\n"
+                + "}\\n"
+                + "\"}]");
   }
 
   @Test
@@ -2349,15 +2463,16 @@ public final class CommandLineRunnerTest {
     String output = new String(outReader.toByteArray(), UTF_8);
     assertThat(output)
         .isEqualTo(
-            "[{\"src\":\"alert(\\\"foo\\\");\\n\","
-                + "\"path\":\"./foo--bar.baz.js\",\"source_map\":\"{\\n\\\"version\\\":3,"
-                + "\\n\\\"file\\\":\\\"./foo--bar.baz.js\\\",\\n\\\"lineCount\\\":1,"
-                + "\\n\\\"mappings\\\":\\\"AAAAA,KAAA,CAAM,KAAN;\\\","
-                + "\\n\\\"sources\\\":[\\\"foo.js\\\"],\\n\\\"names\\\":[\\\"alert\\\"]\\n}\\n\"},"
-                + "{\"src\":\"\\n\",\"path\":\"./$weak$.js\","
-                + "\"source_map\":\"{\\n\\\"version\\\":3,\\n\\\"file\\\":\\\"./$weak$.js\\\","
-                + "\\n\\\"lineCount\\\":1,\\n\\\"mappings\\\":\\\";\\\",\\n\\\"sources\\\":[],"
-                + "\\n\\\"names\\\":[]\\n}\\n\"}]");
+            "[{\"src\":\"alert(\\\"foo\\\");\\n"
+                + "\",\"path\":\"./foo--bar.baz.js\",\"source_map\":\"{\\n"
+                + "\\\"version\\\":3,\\n"
+                + "\\\"file\\\":\\\"./foo--bar.baz.js\\\",\\n"
+                + "\\\"lineCount\\\":1,\\n"
+                + "\\\"mappings\\\":\\\"AAAAA,KAAA,CAAM,KAAN;\\\",\\n"
+                + "\\\"sources\\\":[\\\"foo.js\\\"],\\n"
+                + "\\\"names\\\":[\\\"alert\\\"]\\n"
+                + "}\\n"
+                + "\"}]");
   }
 
   @Test
@@ -2405,12 +2520,129 @@ public final class CommandLineRunnerTest {
     String output = new String(outReader.toByteArray(), UTF_8);
     assertThat(output)
         .isEqualTo(
-            "[{\"src\":\"var module$bar={default:{}};"
-                + "console.log(\\\"bar\\\");var module$foo={default:{}};\\n\",\"path\":\"out.js\","
-                + "\"source_map\":\"{\\n\\\"version\\\":3,\\n\\\"file\\\":\\\"out.js\\\",\\n\\"
-                + "\"lineCount\\\":1,\\n\\\"mappings\\\":\\\"AAAA,IAAA,WAAA,CAAA,QAAA,EAAA,CAAAA,QAAAC,"
-                + "IAAA,CAAY,KAAZ,C,CCAA,IAAA,WAAA,CAAA,QAAA,EAAA;\\\",\\n\\\"sources\\\":[\\\"bar.js\\\","
-                + "\\\"foo.js\\\"],\\n\\\"names\\\":[\\\"console\\\",\\\"log\\\"]\\n}\\n\"}]");
+            "[{\"src\":\"var module$bar={default:{}};console.log(\\\"bar\\\");var"
+                + " module$foo={default:{}};\\n"
+                + "\",\"path\":\"out.js\",\"source_map\":\"{\\n"
+                + "\\\"version\\\":3,\\n"
+                + "\\\"file\\\":\\\"out.js\\\",\\n"
+                + "\\\"lineCount\\\":1,\\n"
+                + "\\\"mappings\\\":\\\"AAAA,IAAA,WAAA,CAAA,QAAA,EAAA,CAAAA,QAAA,CAAQC,GAAR,"
+                + "CAAY,KAAZ,C,CCAA,IAAA,WAAA,CAAA,QAAA,EAAA;\\\",\\n"
+                + "\\\"sources\\\":[\\\"bar.js\\\",\\\"foo.js\\\"],\\n"
+                + "\\\"names\\\":[\\\"console\\\",\\\"log\\\"]\\n"
+                + "}\\n"
+                + "\"}]");
+  }
+
+  @Test
+  public void testInstrumentCodeByLine() {
+    args.add("--instrument_for_coverage_option=LINE");
+
+    test(
+        "function foo(){ const answerToAll = 42; }",
+        lines(
+            "self.window||(self.window=self,self.window.top=self);var __jscov=window.top.__jscov||",
+            "(window.top.__jscov={fileNames:[],instrumentedLines:[],executedLines:[]}),",
+            "JSCompiler_lcov_data_input0=[];",
+            "__jscov.executedLines.push(JSCompiler_lcov_data_input0);",
+            "__jscov.instrumentedLines.push(\"01\");",
+            "__jscov.fileNames.push(\"input0\");",
+            "function foo(){JSCompiler_lcov_data_input0[0]=!0}"));
+  }
+
+  @Test
+  public void testInstrumentCodeByBranch() {
+    args.add("--instrument_for_coverage_option=BRANCH");
+
+    test(
+        "function foo(){ const answerToAll = 42; }",
+        lines(
+            "self.window||(self.window=self,self.window.top=self);",
+            "var __jscov=window.top.__jscov||(window.top.__jscov= ",
+            "{fileNames:[],branchPresent:[],branchesInLine:[],branchesTaken:[]}); ",
+            "function foo(){}"));
+  }
+
+  @Test
+  public void testInstrumentCodeMappingFileNotSet() {
+    args.add("--instrument_for_coverage_option=PRODUCTION");
+
+    FlagUsageException e = assertThrows(FlagUsageException.class, () -> compile("", args));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo(
+            "Expected --instrument_mapping_report to be set when "
+                + "--instrument_for_coverage_option is set to Production");
+  }
+
+  @Test
+  public void testInstrumentCodeProductionArgNotSet() {
+    args.add("--instrument_mapping_report=someFile.txt");
+
+    FlagUsageException e = assertThrows(FlagUsageException.class, () -> compile("", args));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo(
+            "Expected --instrument_for_coverage_option to be passed with PRODUCTION "
+                + "when --instrument_mapping_report is set");
+  }
+
+  @Test
+  public void testInstrumentCodeProductionArrayArgNotSet() {
+    args.add("--instrument_for_coverage_option=PRODUCTION");
+    args.add("--instrument_mapping_report=someFile.txt");
+
+    FlagUsageException e = assertThrows(FlagUsageException.class, () -> compile("", args));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo(
+            "Expected --production_instrumentation_array_name to be set when "
+                + "--instrument_for_coverage_option is set to Production");
+  }
+
+  @Rule public TemporaryFolder folder = new TemporaryFolder();
+
+  @Test
+  public void testInstrumentCodeProductionCreatesInstrumentationMapping() throws IOException {
+    Path tempFolderPath = folder.getRoot().toPath();
+    String filePath = tempFolderPath + "\\someFile.txt";
+
+    args.add("--instrument_for_coverage_option=PRODUCTION");
+    args.add("--instrument_mapping_report=" + filePath);
+    args.add("--production_instrumentation_array_name=ist_arr");
+    args.add("--language_out=NO_TRANSPILE");
+    args.add("--formatting=PRETTY_PRINT");
+
+    String source = lines("function foo() { ", "   console.log('Hello'); ", "}");
+    String expected =
+        lines(
+            "var ist_arr = [];",
+            "function foo() {",
+            "  ist_arr.push('C');",
+            "  console.log('Hello');",
+            "}");
+
+    externs =
+        ImmutableList.of(
+            new TestExternsBuilder()
+                .addArray()
+                .addAlert()
+                .addExtra("let ist_arr;")
+                .buildExternsFile("externs"));
+
+    test(source, expected);
+
+    File variableMap = new File(filePath);
+
+    List<String> variableMapFile = Files.readLines(variableMap, UTF_8);
+
+    assertThat(variableMapFile)
+        .containsExactly(
+            " FileNames:[\"input0\"]",
+            " FunctionNames:[\"foo\"]",
+            " Types:[\"FUNCTION\"]",
+            "C:AAACA")
+        .inOrder();
   }
 
   @Test
@@ -2441,18 +2673,34 @@ public final class CommandLineRunnerTest {
 
     test(
         "let Foo; const x = `${Foo}`;",
-        "var Foo, x = ''+Foo;");
+        lines(
+            "var $jscomp=$jscomp||{};$jscomp.scope={};",
+            "$jscomp.createTemplateTagFirstArg=function(a){return a.raw=a;};",
+            "$jscomp.createTemplateTagFirstArgWithRaw=function(a,b){a.raw=b;return a};",
+            "var Foo,x=\"\"+Foo"));
 
     test(
         "const x = `\\${Foo}`;",
-        "var x = '\\${Foo}'");
+        lines(
+            "var $jscomp=$jscomp||{};$jscomp.scope={};",
+            "$jscomp.createTemplateTagFirstArg=function(a){return a.raw=a;};",
+            "$jscomp.createTemplateTagFirstArgWithRaw=function(a,b){a.raw=b;return a};",
+            "var x=\"${Foo}\""));
 
     test(
         "let Foo; const x = `${Foo}\\${Foo}`;",
-        "var Foo, x = Foo+'\\${Foo}';");
+        lines(
+            "var $jscomp=$jscomp||{};$jscomp.scope={};",
+            "$jscomp.createTemplateTagFirstArg=function(a){return a.raw=a;};",
+            "$jscomp.createTemplateTagFirstArgWithRaw=function(a,b){a.raw=b;return a};",
+            "var Foo,x=Foo+\"${Foo}\""));
     test(
         "let Foo; const x = `\\${Foo}${Foo}`;",
-        "var Foo, x = '\\${Foo}'+Foo;");
+        lines(
+            "var $jscomp=$jscomp||{};$jscomp.scope={};",
+            "$jscomp.createTemplateTagFirstArg=function(a){return a.raw=a;};",
+            "$jscomp.createTemplateTagFirstArgWithRaw=function(a,b){a.raw=b;return a};",
+            "var Foo,x=\"${Foo}\"+Foo"));
   }
 
   /** windows shells can add extra quotes to an argument */
@@ -2491,22 +2739,75 @@ public final class CommandLineRunnerTest {
     String output = new String(outReader.toByteArray(), UTF_8);
     assertThat(output)
         .isEqualTo(
-            "[{\"src\":\"\\n\",\"path\":\"./m1.js\",\"source_map\":\"{\\n\\\"version\\\":3,"
-                + "\\n\\\"file\\\":\\\"./m1.js\\\",\\n\\\"lineCount\\\":1,\\n\\\"mappings\\\":\\\";\\\""
-                + ",\\n\\\"sources\\\":[],\\n\\\"names\\\":[]\\n}\\n\"},{\"src\":\"alert(\\\"foo\\\");"
-                + "\\n\",\"path\":\"./m2.js\",\"source_map\":\"{\\n\\\"version\\\":3,\\n\\\"file\\\":"
-                + "\\\"./m2.js\\\",\\n\\\"lineCount\\\":1,\\n\\\"mappings\\\":\\\"AAAAA,KAAA,CAAM,KAAN;"
-                + "\\\",\\n\\\"sources\\\":[\\\"foo.js\\\"],\\n\\\"sourcesContent\\\":[\\\""
-                + "alert('foo');\\\"],\\n\\\"names\\\":[\\\"alert\\\"]\\n}\\n\"},"
-                + "{\"src\":\"\\n\",\"path\":\"./$weak$.js\",\"source_map\":\"{\\n\\\"version\\\":3,\\n"
-                + "\\\"file\\\":\\\"./$weak$.js\\\",\\n\\\"lineCount\\\":1,\\n\\\"mappings\\\":\\\";"
-                + "\\\",\\n\\\"sources\\\":[],\\n\\\"names\\\":[]\\n}\\n\"}]");
+            "[{\"src\":\"\\n"
+                + "\",\"path\":\"./m1.js\",\"source_map\":\"{\\n"
+                + "\\\"version\\\":3,\\n"
+                + "\\\"file\\\":\\\"./m1.js\\\",\\n"
+                + "\\\"lineCount\\\":1,\\n"
+                + "\\\"mappings\\\":\\\";\\\",\\n"
+                + "\\\"sources\\\":[],\\n"
+                + "\\\"names\\\":[]\\n"
+                + "}\\n"
+                + "\"},{\"src\":\"alert(\\\"foo\\\");\\n"
+                + "\",\"path\":\"./m2.js\",\"source_map\":\"{\\n"
+                + "\\\"version\\\":3,\\n"
+                + "\\\"file\\\":\\\"./m2.js\\\",\\n"
+                + "\\\"lineCount\\\":1,\\n"
+                + "\\\"mappings\\\":\\\"AAAAA,KAAA,CAAM,KAAN;\\\",\\n"
+                + "\\\"sources\\\":[\\\"foo.js\\\"],\\n"
+                + "\\\"sourcesContent\\\":[\\\"alert('foo');\\\"],\\n"
+                + "\\\"names\\\":[\\\"alert\\\"]\\n"
+                + "}\\n"
+                + "\"}]");
   }
 
   @Test
   public void testOptionalCatch() {
     args.add("--language_in=ECMASCRIPT_2019");
     test("try { x(); } catch {}", "try{x()}catch(a){}");
+  }
+
+  @Test
+  public void testChunkOutputFiles() throws IOException {
+    File inDir = Files.createTempDir();
+    File outDir = Files.createTempDir();
+
+    File inputFile1 = new File(inDir, "input1.js");
+    String inputSource1 = "var x=1;\n";
+    Files.asCharSink(inputFile1, UTF_8).write(inputSource1);
+
+    File inputFile2 = new File(inDir, "input2.js");
+    String inputSource2 = "var y=2;\n";
+    Files.asCharSink(inputFile2, UTF_8).write(inputSource2);
+
+    File outputFile1 = new File(outDir, "a.js");
+    File outputFile2 = new File(outDir, "b.js");
+    File weakFile = new File(outDir, JSModule.WEAK_MODULE_NAME + ".js");
+
+    args.add("--chunk_output_path_prefix");
+    args.add(outDir + "/");
+    args.add("--chunk=a:1");
+    args.add("--chunk=b:1");
+    args.add("--js");
+    args.add(inputFile1.toString());
+    args.add("--js");
+    args.add(inputFile2.toString());
+
+    CommandLineRunner runner =
+        new CommandLineRunner(
+            args.toArray(new String[] {}), new PrintStream(outReader), new PrintStream(errReader));
+
+    lastCompiler = runner.getCompiler();
+    try {
+      runner.doRun();
+    } catch (IOException e) {
+      e.printStackTrace();
+      assertWithMessage("Unexpected exception " + e).fail();
+    }
+
+    assertThat(Files.asCharSource(outputFile1, UTF_8).read()).isEqualTo(inputSource1);
+    assertThat(Files.asCharSource(outputFile2, UTF_8).read()).isEqualTo(inputSource2);
+    assertThat(weakFile.exists()).isFalse();
   }
 
   /* Helper functions */
@@ -2566,16 +2867,7 @@ public final class CommandLineRunnerTest {
       assertThat(compiler.toSource()).isEqualTo(Joiner.on("").join(compiled));
     } else {
       Node expectedRoot = parse(compiled);
-      String explanation = expectedRoot.checkTreeEquals(root);
-      assertWithMessage(
-              "\nExpected: "
-                  + compiler.toSource(expectedRoot)
-                  + "\nResult: "
-                  + compiler.toSource(root)
-                  + "\n"
-                  + explanation)
-          .that(explanation)
-          .isNull();
+      assertNode(root).usingSerializer(compiler::toSource).isEqualTo(expectedRoot);
     }
   }
 
@@ -2650,7 +2942,7 @@ public final class CommandLineRunnerTest {
     try (ZipOutputStream zipOutputStream = new ZipOutputStream(new FileOutputStream(tempZipFile))) {
       for (Entry<String, String> entry : entryContentsByName.entrySet()) {
         zipOutputStream.putNextEntry(new ZipEntry(entry.getKey()));
-        zipOutputStream.write(entry.getValue().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        zipOutputStream.write(entry.getValue().getBytes(UTF_8));
       }
     }
 
@@ -2662,7 +2954,7 @@ public final class CommandLineRunnerTest {
     File tempJsFile = File.createTempFile(filename, ".js",
         java.nio.file.Files.createTempDirectory("jscomp").toFile());
     try (FileOutputStream fileOutputStream = new FileOutputStream(tempJsFile)) {
-      fileOutputStream.write(fileContent.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      fileOutputStream.write(fileContent.getBytes(UTF_8));
     }
 
     return new FlagEntry<>(JsSourceType.JS, tempJsFile.getAbsolutePath());
@@ -2677,13 +2969,6 @@ public final class CommandLineRunnerTest {
   private final void compileFiles(String expectedOutput, FlagEntry<JsSourceType>... entries) {
     setupFlags(entries);
     compileArgs(expectedOutput, null);
-  }
-
-  @SafeVarargs
-  private final void compileFilesError(
-      DiagnosticType expectedError, FlagEntry<JsSourceType>... entries) {
-    setupFlags(entries);
-    compileArgs("", expectedError);
   }
 
   @SafeVarargs
@@ -2768,13 +3053,13 @@ public final class CommandLineRunnerTest {
       }
       inputsSupplier = Suppliers.ofInstance(inputs);
     } else if (useModules == ModulePattern.STAR) {
-      modulesSupplier = Suppliers.<List<JSModule>>ofInstance(
-          ImmutableList.copyOf(
-              CompilerTestCase.createModuleStar(original)));
+      modulesSupplier =
+          Suppliers.<List<JSModule>>ofInstance(
+              ImmutableList.copyOf(JSChunkGraphBuilder.forStar().addChunks(original).build()));
     } else if (useModules == ModulePattern.CHAIN) {
-      modulesSupplier = Suppliers.<List<JSModule>>ofInstance(
-          ImmutableList.copyOf(
-              CompilerTestCase.createModuleChain(original)));
+      modulesSupplier =
+          Suppliers.<List<JSModule>>ofInstance(
+              ImmutableList.copyOf(JSChunkGraphBuilder.forChain().addChunks(original).build()));
     } else {
       throw new IllegalArgumentException("Unknown module type: " + useModules);
     }
@@ -2806,8 +3091,7 @@ public final class CommandLineRunnerTest {
     Node all = compiler.parseInputs();
     assertThat(compiler.getErrors()).isEmpty();
     checkNotNull(all);
-    Node n = all.getLastChild();
-    return n;
+    return all.getLastChild();
   }
 
   private void setFilename(int i, String filename) {

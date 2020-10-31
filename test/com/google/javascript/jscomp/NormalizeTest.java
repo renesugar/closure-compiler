@@ -44,7 +44,7 @@ public final class NormalizeTest extends CompilerTestCase {
   @Before
   public void setUp() throws Exception {
     super.setUp();
-    setAcceptedLanguage(LanguageMode.ECMASCRIPT_2018);
+    setAcceptedLanguage(LanguageMode.ECMASCRIPT_NEXT_IN);
   }
 
   @Override
@@ -63,6 +63,25 @@ public final class NormalizeTest extends CompilerTestCase {
   protected int getNumRepetitions() {
     // The normalize pass is only run once.
     return 1;
+  }
+
+  @Test
+  public void testNullishCoalesce() {
+    setLanguage(LanguageMode.UNSUPPORTED, LanguageMode.UNSUPPORTED);
+    test("var a = x ?? y, b = foo()", "var a = x ?? y; var b = foo()");
+    test(
+        lines(
+            "let x = a ?? b;",
+            "{ let x = a ?? b; }",
+            "{ let x = a ?? b; }",
+            "{ let x = a ?? b; }",
+            "{ let x = a ?? b; }"),
+        lines(
+            "let x = a ?? b;",
+            "{ let x$jscomp$1 = a ?? b; }",
+            "{ let x$jscomp$2 = a ?? b; }",
+            "{ let x$jscomp$3 = a ?? b; }",
+            "{ let x$jscomp$4 = a ?? b; }"));
   }
 
   @Test
@@ -298,6 +317,15 @@ public final class NormalizeTest extends CompilerTestCase {
   }
 
   @Test
+  public void testFunctionDeclInBlockScope() {
+    testSame("var x; { function g() {} }");
+    test("var g; { function g() {} }", "var g; { function g$jscomp$1() {} }");
+
+    testSameInFunction("var x; { function g() {} }");
+    testInFunction("var g; { function g() {} }", "var g; { function g$jscomp$1() {} }");
+  }
+
+  @Test
   public void testAssignShorthand() {
     test("x |= 1;", "x = x | 1;");
     test("x ^= 1;", "x = x ^ 1;");
@@ -482,10 +510,8 @@ public final class NormalizeTest extends CompilerTestCase {
   @Test
   public void testMoveFunctions2() {
     testSame("function f() { function foo() {} }");
-    test("function f() { f(); {function bar() {}}}",
-        "function f() { f(); {var bar = function () {}}}");
-    test("function f() { f(); if (true) {function bar() {}}}",
-        "function f() { f(); if (true) {var bar = function () {}}}");
+    testSame("function f() { f(); {function bar() {}}}");
+    testSame("function f() { f(); if (true) {function bar() {}}}");
   }
 
   private static String inFunction(String code) {
@@ -507,27 +533,18 @@ public final class NormalizeTest extends CompilerTestCase {
     test("var f = function f() {}",
         "var f = function f$jscomp$1() {}");
     testSame("var f = function g() {}");
-    test("{function g() {}}",
-        "{var g = function () {}}");
+    testSame("{function g() {}}");
     testSame("if (function g() {}) {}");
-    test("if (true) {function g() {}}",
-        "if (true) {var g = function () {}}");
-    test("if (true) {} else {function g() {}}",
-        "if (true) {} else {var g = function () {}}");
+    testSame("if (true) {function g() {}}");
+    testSame("if (true) {} else {function g() {}}");
     testSame("switch (function g() {}) {}");
-    test("switch (1) { case 1: function g() {}}",
-        "switch (1) { case 1: var g = function () {}}");
-    test("if (true) {function g() {} function h() {}}",
-        "if (true) {var h = function() {}; var g = function () {}}");
-
+    testSame("switch (1) { case 1: function g() {}}");
+    testSame("if (true) {function g() {} function h() {}}");
 
     testSameInFunction("function f() {}");
-    testInFunction("f(); {function g() {}}",
-        "f(); {var g = function () {}}");
-    testInFunction("f(); if (true) {function g() {}}",
-        "f(); if (true) {var g = function () {}}");
-    testInFunction("if (true) {} else {function g() {}}",
-        "if (true) {} else {var g = function () {}}");
+    testSameInFunction("f(); {function g() {}}");
+    testSameInFunction("f(); if (true) {function g() {}}");
+    testSameInFunction("if (true) {} else {function g() {}}");
   }
 
   @Test
@@ -649,21 +666,15 @@ public final class NormalizeTest extends CompilerTestCase {
         "f = 1; function f(){}");
     test("var f; function f(){}",
         "function f(){}");
-    test("if (a) { var f = 1; } else { function f(){} }",
-        "if (a) { var f = 1; } else { f = function (){} }");
 
     test("function f(){} var f = 1;",
         "function f(){} f = 1;");
     test("function f(){} var f;",
         "function f(){}");
-    test("if (a) { function f(){} } else { var f = 1; }",
-        "if (a) { var f = function (){} } else { f = 1; }");
 
     // TODO(johnlenz): Do we need to handle this differently for "third_party"
     // mode? Remove the previous function definitions?
     testSame("function f(){} function f(){}");
-    test("if (a) { function f(){} } else { function f(){} }",
-        "if (a) { var f = function (){} } else { f = function (){} }");
   }
 
   // It's important that we not remove this var completely. See
@@ -902,8 +913,32 @@ public final class NormalizeTest extends CompilerTestCase {
   }
 
   @Test
+  public void testPropertyIsConstant1_optionalChaining() {
+    testSame("var a = {}; a.CONST = 3; var b = a?.CONST;");
+    Node n = getLastCompiler().getRoot();
+
+    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
+    assertThat(constantNodes).hasSize(2);
+    for (Node hasProp : constantNodes) {
+      assertThat(hasProp.getString()).isEqualTo("CONST");
+    }
+  }
+
+  @Test
   public void testPropertyIsConstant2() {
     testSame("var a = {CONST: 3}; var b = a.CONST;");
+    Node n = getLastCompiler().getRoot();
+
+    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
+    assertThat(constantNodes).hasSize(2);
+    for (Node hasProp : constantNodes) {
+      assertThat(hasProp.getString()).isEqualTo("CONST");
+    }
+  }
+
+  @Test
+  public void testPropertyIsConstant2_optionalChaining() {
+    testSame("var a = {CONST: 3}; var b = a?.CONST;");
     Node n = getLastCompiler().getRoot();
 
     Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
@@ -926,9 +961,34 @@ public final class NormalizeTest extends CompilerTestCase {
   }
 
   @Test
+  public void testGetterPropertyIsConstant_optionalChaining() {
+    testSame("var a = { get CONST() {return 3} }; var b = a?.CONST;");
+    Node n = getLastCompiler().getRoot();
+
+    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
+    assertThat(constantNodes).hasSize(2);
+    for (Node hasProp : constantNodes) {
+      assertThat(hasProp.getString()).isEqualTo("CONST");
+    }
+  }
+
+  @Test
   public void testSetterPropertyIsConstant() {
     // Verifying that a SET is properly annotated.
     testSame("var a = { set CONST(b) {throw 'invalid'} }; var c = a.CONST;");
+    Node n = getLastCompiler().getRoot();
+
+    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
+    assertThat(constantNodes).hasSize(2);
+    for (Node hasProp : constantNodes) {
+      assertThat(hasProp.getString()).isEqualTo("CONST");
+    }
+  }
+
+  @Test
+  public void testSetterPropertyIsConstant_optionalChaining() {
+    // Verifying that a SET is properly annotated.
+    testSame("var a = { set CONST(b) {throw 'invalid'} }; var c = a?.CONST;");
     Node n = getLastCompiler().getRoot();
 
     Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);

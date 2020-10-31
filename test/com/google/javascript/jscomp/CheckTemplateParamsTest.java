@@ -39,21 +39,49 @@ public final class CheckTemplateParamsTest extends CompilerTestCase {
   }
 
   @Override
-  protected int getNumRepetitions() {
-    return 1;
-  }
-
-  @Override
   protected CompilerPass getProcessor(Compiler compiler) {
     // No-op. We're just checking for warnings during JSDoc parsing.
     return (externs, root) -> {};
   }
 
   @Override
-  protected CompilerOptions getOptions(CompilerOptions options) {
-    super.getOptions(options);
+  protected CompilerOptions getOptions() {
+    CompilerOptions options = super.getOptions();
     options.setWarningLevel(DiagnosticGroups.TOO_MANY_TYPE_PARAMS, CheckLevel.WARNING);
     return options;
+  }
+
+  @Test
+  public void testIterator() {
+    testSame("/** @type {!Iterator} */ var x;");
+    testSame("/** @type {!Iterator<string>} */ var x;");
+    testSame("/** @type {!Iterator<string, number>} */ var x;");
+    testSame("/** @type {!Iterator<string, number, void>} */ var x;");
+    test(
+        srcs("/** @type {!Iterator<string, number, void, void>} */ var x;"),
+        warning(TOO_MANY_TEMPLATE_PARAMS));
+  }
+
+  @Test
+  public void testGenerator() {
+    testSame("/** @type {!Generator} */ var x;");
+    testSame("/** @type {!Generator<string>} */ var x;");
+    testSame("/** @type {!Generator<string, number>} */ var x;");
+    testSame("/** @type {!Iterator<string, number, void>} */ var x;");
+    test(
+        srcs("/** @type {!Generator<string, number, void, void>} */ var x;"),
+        warning(TOO_MANY_TEMPLATE_PARAMS));
+  }
+
+  @Test
+  public void testAsyncIterator() {
+    testSame("/** @type {!AsyncIterator} */ var x;");
+    testSame("/** @type {!AsyncIterator<string>} */ var x;");
+    testSame("/** @type {!AsyncIterator<string, number>} */ var x;");
+    testSame("/** @type {!AsyncIterator<string, number, void>} */ var x;");
+    test(
+        srcs("/** @type {!AsyncIterator<string, number, void, void>} */ var x;"),
+        warning(TOO_MANY_TEMPLATE_PARAMS));
   }
 
   @Test
@@ -95,4 +123,16 @@ public final class CheckTemplateParamsTest extends CompilerTestCase {
         warning(TOO_MANY_TEMPLATE_PARAMS));
   }
 
+  @Test
+  public void testReferenceToNonObjectType() {
+    test(srcs("/** @type {string<null>} */ var x;"), warning(TOO_MANY_TEMPLATE_PARAMS));
+    test(srcs("/** @type {string<null, null>} */ var x;"), warning(TOO_MANY_TEMPLATE_PARAMS));
+    // TODO(b/287880204): this should warn TOO_MANY_TEMPLATE_PARAMS
+    test(
+        srcs(
+            lines(
+                "/** @type {NumberType<null>} */ var x;", //
+                "/** @typedef {number} */",
+                "let NumberType;")));
+  }
 }

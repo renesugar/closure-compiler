@@ -32,23 +32,22 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
   @Before
   public void setUp() throws Exception {
     super.setUp();
-    this.late = false;
-    this.numRepetitions = 2;
+
+    enableNormalize();
+    late = false;
+    numRepetitions = 2;
   }
 
   @Override
   protected CompilerPass getProcessor(final Compiler compiler) {
-    PeepholeOptimizationsPass peepholePass =
-        new PeepholeOptimizationsPass(
-            compiler,
-            getName(),
-            new PeepholeMinimizeConditions(late),
-            new PeepholeSubstituteAlternateSyntax(late),
-            new PeepholeRemoveDeadCode(),
-            new PeepholeFoldConstants(late, false /* useTypes */),
-            new PeepholeReplaceKnownMethods(late, false /* useTypes */));
-
-    return peepholePass;
+    return new PeepholeOptimizationsPass(
+        compiler,
+        getName(),
+        new PeepholeMinimizeConditions(late),
+        new PeepholeSubstituteAlternateSyntax(late),
+        new PeepholeRemoveDeadCode(),
+        new PeepholeFoldConstants(late, false /* useTypes */),
+        new PeepholeReplaceKnownMethods(late, false /* useTypes */));
   }
 
   @Override
@@ -107,7 +106,7 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
 
      // Verify that non-global scope works.
      test("function foo(){if(x()){}}", "function foo(){x()}");
-
+    test("function foo(){if(x?.()){}}", "function foo(){x?.()}");
   }
 
   @Test
@@ -131,14 +130,21 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
          "function f(){}");
   }
 
+  /** Try to minimize returns */
+  @Test
+  public void testFoldReturnsIntegrationWithScoped() {
+    late = true;
+    disableNormalize();
+
+    // if-then-else duplicate statement removal handles this case:
+    testSame("function test(a) {if (a) {const a = Math.random();if(a) {return a;}} return a; }");
+  }
+
   @Test
   public void testBug1059649() {
     // ensure that folding blocks with a single var node doesn't explode
     test("if(x){var y=3;}var z=5", "if(x)var y=3;var z=5");
 
-    // With normalization, we no longer have this case.
-    testSame("if(x){var y=3;}else{var y=4;}var z=5");
-    test("while(x){var y=3;}var z=5", "while(x)var y=3;var z=5");
     test("for(var i=0;i<10;i++){var y=3;}var z=5",
          "for(var i=0;i<10;i++)var y=3;var z=5");
     test("for(var i in x){var y=3;}var z=5",
@@ -158,7 +164,6 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
 
   @Test
   public void testRemoveDuplicateStatementsIntegration() {
-    enableNormalize();
     test(
         lines(
             "function z() {if (a) { return true }",
@@ -186,7 +191,7 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
 
   @Test
   public void testFoldBitwiseOpStringCompareIntegration() {
-    test("while (-1 | 0) {}", "while (1);");
+    test("for (;-1 | 0;) {}", "for (;;);");
   }
 
   @Test
@@ -207,16 +212,6 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
   }
 
   @Test
-  public void testFoldUselessWhileIntegration() {
-    test("while(!true) { foo() }", "");
-    test("while(!false) foo() ", "while(1) foo()");
-    test("while(!void 0) foo()", "while(1) foo()");
-
-    // Make sure proper empty nodes are inserted.
-    test("if(foo())while(false){foo()}else bar()", "foo()||bar()");
-  }
-
-  @Test
   public void testFoldUselessForIntegration() {
     test("for(;!true;) { foo() }", "");
     test("for(;void 0;) { foo() }", "");
@@ -226,6 +221,7 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
 
     // Make sure proper empty nodes are inserted.
     test("if(foo())for(;false;){foo()}else bar()", "foo()||bar()");
+    test("if(foo?.())for(;false;){foo?.()}else bar?.()", "foo?.()||bar?.()");
   }
 
   @Test
@@ -237,17 +233,15 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
 
     // Make sure proper empty nodes are inserted.
     test("if(foo())do {foo()} while(false) else bar()", "foo()?foo():bar()");
-  }
 
-  @Test
-  public void testMinimizeWhileConstantConditionIntegration() {
-    test("while(!false) foo()", "while(1) foo()");
-    test("while(202) foo()", "while(1) foo()");
-    test("while(Infinity) foo()", "while(1) foo()");
-    test("while('text') foo()", "while(1) foo()");
-    test("while([]) foo()", "while(1) foo()");
-    test("while({}) foo()", "while(1) foo()");
-    test("while(/./) foo()", "while(1) foo()");
+    // Optional chaining version of these tests.
+    test("do { foo?.() } while(!true);", "foo?.()");
+    test("do { foo?.() } while(void 0);", "foo?.()");
+    test("do { foo?.() } while(undefined);", "foo?.()");
+    test("do { foo?.() } while(!void 0);", "do { foo?.() } while(1);");
+
+    // Make sure proper empty nodes are inserted.
+    test("if(foo?.())do {foo?.()} while(false) else bar?.()", "foo?.() ? foo?.() : bar?.()");
   }
 
   @Test
@@ -260,14 +254,19 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
 
     /* This is similar to the !!true case */
     test("!!x()&&y()", "x()&&y()");
+    test("!!x?.()&&y?.()", "x?.()&&y?.()");
   }
 
   @Test
   public void testBug1509085() {
-    this.numRepetitions = 1;
-    this.late = true;
+    numRepetitions = 1;
+    late = true;
+    // Such code can be replaced by using the simpler, equivalent optional chaining operator
+    // `x?.()`.
     test("x ? x() : void 0", "x&&x();");
     testSame("y = x ? x() : void 0");
+
+    testSame("x?.()");
   }
 
   @Test
@@ -286,7 +285,7 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
 
   @Test
   public void testFoldNegativeBug() {
-    test("while(-3){};", "while(1);");
+    test("for (;-3;){};", "for (;;);");
   }
 
   @Test
@@ -317,6 +316,10 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
     test("a() && (1 && b())", "a() && b()");
     test("a() && 1 && b()", "a() && b()");
     test("(a() && 1) && b()", "a() && b()");
+
+    test("a?.() && (1 && b?.())", "a?.() && b?.()");
+    test("a?.() && 1 && b?.()", "a?.() && b?.()");
+    test("(a?.() && 1) && b?.()", "a?.() && b?.()");
   }
 
   @Test
@@ -327,6 +330,7 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
     test("(x && false) && y()", "");
     test("a = x || false ? b : c", "a=x?b:c");
     test("do {x()} while((x && false) && y())", "x()");
+    test("do {x?.()} while((x && false) && y?.())", "x?.()");
   }
 
   // A few miscellaneous cases where one of the peephole passes increases the
@@ -362,8 +366,10 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
   public void testAvoidCommaSplitting() {
     late = false;
     test("x(),y(),z()", "x();y();z()");
+    test("x?.(),y?.(),z?.()", "x?.();y?.();z?.()");
     late = true;
     testSame("x(),y(),z()");
+    testSame("x?.(),y?.(),z?.()");
   }
 
   @Test
@@ -372,6 +378,8 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
     test("({a:1})", "");
     test("({a:foo()})", "foo()");
     test("({'a':foo()})", "foo()");
+    test("({a:foo?.()})", "foo?.()");
+    test("({'a':foo?.()})", "foo?.()");
   }
 
   @Test
@@ -402,6 +410,7 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
          "function f(a) {return a}");
   }
 
+  @Test
   public void disable_testFoldHook1() {
     test("function f(a) {return (!a)?a:a;}",
          "function f(a) {return a}");
@@ -409,7 +418,6 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
 
   @Test
   public void testTemplateStringsKnownMethods() {
-    enableNormalize();
     test("x = `abcdef`.indexOf('b')", "x = 1");
     test("x = [`a`, `b`, `c`].join(``)", "x='abc'");
     test("x = `abcdef`.substr(0,2)", "x = 'ab'");
@@ -422,5 +430,21 @@ public class PeepholeIntegrationTest extends CompilerTestCase {
     test("x = `\t\n\uFEFF\t asd foo bar \r\n`.trim()", "x = 'asd foo bar'");
     test("x = parseInt(`123`)", "x = 123");
     test("x = parseFloat(`1.23`)", "x = 1.23");
+  }
+
+  @Test
+  public void testDontFoldKnownMethodsWithOptionalChaining() {
+    // Known methods guarded by an optional chain are not folded
+    test("x = `abcdef`.indexOf?.('b')", "x = \"abcdef\".indexOf?.(\"b\");");
+    test("x = [`a`, `b`, `c`].join?.(``)", "x = [\"a\", \"b\", \"c\"].join?.(\"\")");
+    test("x = `abcdef`.substr?.(0,2)", "x = \"abcdef\".substr?.(0,2)");
+    test("x = `abcdef`.substring?.(0,2)", "x = \"abcdef\".substring?.(0,2)");
+    test("x = `abcdef`.slice?.(0,2)", "x = \"abcdef\".slice?.(0,2)");
+    test("x = `abcdef`.charAt?.(0)", "x = \"abcdef\".charAt?.(0)");
+    test("x = `abcdef`.charCodeAt?.(0)", "x = \"abcdef\".charCodeAt?.(0)");
+    test("x = `abc`.toUpperCase?.()", "x = \"abc\".toUpperCase?.()");
+    test("x = `ABC`.toLowerCase?.()", "x = \"ABC\".toLowerCase?.()");
+    test("x = parseInt?.(`123`)", "x = parseInt?.(\"123\")");
+    test("x = parseFloat?.(`1.23`)", "x = parseFloat?.(\"1.23\")");
   }
 }

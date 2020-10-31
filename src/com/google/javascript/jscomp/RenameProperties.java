@@ -62,7 +62,6 @@ import javax.annotation.Nullable;
  * references. Here are two examples:
  *    JSCompiler_renameProperty('propertyName') -> 'jYq'
  *    JSCompiler_renameProperty('myProp.nestedProp.innerProp') -> 'e4.sW.C$'
- *
  */
 class RenameProperties implements CompilerPass {
   private static final Splitter DOT_SPLITTER = Splitter.on('.');
@@ -255,7 +254,7 @@ class RenameProperties implements CompilerPass {
 
     compiler.setLifeCycleStage(LifeCycleStage.NORMALIZED_OBFUSCATED);
     // This pass may rename getter or setter properties
-    GatherGettersAndSetterProperties.update(compiler, externs, root);
+    GatherGetterAndSetterProperties.update(compiler, externs, root);
   }
 
   /**
@@ -335,6 +334,7 @@ class RenameProperties implements CompilerPass {
         case COMPUTED_PROP:
           break;
         case GETPROP:
+        case OPTCHAIN_GETPROP:
           Node propNode = n.getSecondChild();
           if (propNode.isString()) {
             if (compiler.getCodingConvention().blockRenamingForProperty(
@@ -346,39 +346,39 @@ class RenameProperties implements CompilerPass {
           }
           break;
         case OBJECTLIT:
-          for (Node key = n.getFirstChild(); key != null; key = key.getNext()) {
-            if (key.isComputedProp()) {
-              // We don't want to rename computed properties
-              continue;
-            } else if (key.isQuotedString()) {
-              // Ensure that we never rename some other property in a way
-              // that could conflict with this quoted key.
-              quotedNames.add(key.getString());
-            } else if (compiler.getCodingConvention().blockRenamingForProperty(key.getString())) {
-              externedNames.add(key.getString());
-            } else {
-              maybeMarkCandidate(key);
-            }
-          }
-          break;
         case OBJECT_PATTERN:
-          // Iterate through all the nodes in the object pattern
+          // Iterate through all the properties.
           for (Node key = n.getFirstChild(); key != null; key = key.getNext()) {
-            if (key.isComputedProp()) {
-              // We don't want to rename computed properties
-              continue;
-            } else if (key.isQuotedString()) {
-              // Ensure that we never rename some other property in a way
-              // that could conflict with this quoted key.
-              quotedNames.add(key.getString());
-            } else if (compiler.getCodingConvention().blockRenamingForProperty(key.getString())) {
-              externedNames.add(key.getString());
-            } else {
-              maybeMarkCandidate(key);
+            switch (key.getToken()) {
+              case COMPUTED_PROP: // We don't want to rename computed properties
+              case OBJECT_REST:
+              case OBJECT_SPREAD:
+                break;
+
+              case GETTER_DEF:
+              case MEMBER_FUNCTION_DEF:
+              case SETTER_DEF:
+              case STRING_KEY:
+                String propName = key.getString();
+                if (key.isQuotedString()) {
+                  // Ensure that we never rename some other property in a way
+                  // that could conflict with this quoted key.
+                  quotedNames.add(propName);
+                } else if (compiler.getCodingConvention().blockRenamingForProperty(propName)) {
+                  externedNames.add(propName);
+                } else {
+                  maybeMarkCandidate(key);
+                }
+                break;
+
+              default:
+                throw new IllegalStateException(
+                    "Unexpected child of " + n.getToken() + ": " + key.toStringTree());
             }
           }
           break;
         case GETELEM:
+        case OPTCHAIN_GETELEM:
           // If this is a quoted property access (e.g. x['myprop']), we need to
           // ensure that we never rename some other property in a way that
           // could conflict with this quoted name.
@@ -443,7 +443,10 @@ class RenameProperties implements CompilerPass {
               }
             } else if (NodeUtil.isFunctionExpression(n)
                 && parent.isAssign()
-                && parent.getFirstChild().isGetProp()
+                && parent
+                    .getFirstChild()
+                    .isGetProp() // JSCompiler does not handle optional calls to property rename
+                // function
                 && compiler
                     .getCodingConvention()
                     .isPropertyRenameFunction(parent.getFirstChild().getOriginalQualifiedName())) {
@@ -510,11 +513,7 @@ class RenameProperties implements CompilerPass {
      * @param name The property name
      */
     private void countPropertyOccurrence(String name) {
-      Property prop = propertyMap.get(name);
-      if (prop == null) {
-        prop = new Property(name);
-        propertyMap.put(name, prop);
-      }
+      Property prop = propertyMap.computeIfAbsent(name, Property::new);
       prop.numOccurrences++;
     }
   }

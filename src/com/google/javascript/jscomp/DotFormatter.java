@@ -37,12 +37,12 @@ import java.util.List;
  * <code>System.out.println(new DotFormatter().toDot(<i>node</i>));</code>
  * <p>This class is <b>not</b> thread safe and should not be used without proper
  * external synchronization.</p>
- *
  */
 public final class DotFormatter {
   private static final String INDENT = "  ";
   private static final String ARROW = " -> ";
   private static final String LINE = " -- ";
+  private static final int MAX_LABEL_NAME_LENGTH = 10;
 
   // stores the current assignment of node to keys
   private final HashMap<Node, Integer> assignments = new HashMap<>();
@@ -198,8 +198,7 @@ public final class DotFormatter {
 
     // Flow Edges
     if (cfg != null && cfg.hasNode(parent)) {
-      List<DiGraphEdge<Node, Branch>> outEdges =
-        cfg.getOutEdges(parent);
+      List<? extends DiGraphEdge<Node, Branch>> outEdges = cfg.getOutEdges(parent);
       String[] edgeList = new String[outEdges.size()];
       for (int i = 0; i < edgeList.length; i++) {
         DiGraphEdge<Node, ControlFlowGraph.Branch> edge = outEdges.get(i);
@@ -237,6 +236,9 @@ public final class DotFormatter {
       builder.append(formatNodeName(key));
       builder.append(" [label=\"");
       builder.append(n.getToken().toString());
+      if (n.isName() || n.isString() || n.isImportStar() || n.isStringKey()) {
+        builder.append(getNodeLabel(n));
+      }
       JSType type = n.getJSType();
       if (type != null) {
         builder.append(" : ");
@@ -256,6 +258,17 @@ public final class DotFormatter {
       builder.append("];\n");
     }
     return key;
+  }
+
+  private static String getNodeLabel(Node n) {
+    String content = n.getString();
+    if (content.length() > MAX_LABEL_NAME_LENGTH) {
+      content = content.substring(0, MAX_LABEL_NAME_LENGTH);
+    }
+    if (!content.isEmpty()) {
+      content = "(" + content + ")";
+    }
+    return content;
   }
 
   private static String formatNodeName(Integer key) {

@@ -16,6 +16,7 @@
 package com.google.javascript.jscomp.modules;
 
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.javascript.jscomp.modules.ModuleMapCreator.DOES_NOT_HAVE_EXPORT;
 
 import com.google.common.base.Strings;
 import com.google.common.collect.ArrayListMultimap;
@@ -66,7 +67,7 @@ import javax.annotation.Nullable;
  * href="https://www.ecma-international.org/ecma-262/9.0/index.html#sec-source-text-module-records">
  * Suggested reading</a>
  */
-final class EsModuleProcessor implements Callback, ModuleProcessor {
+public final class EsModuleProcessor implements Callback, ModuleProcessor {
 
   /**
    * Error occurs when there is an ambiguous export, which can happen if there are multiple {@code
@@ -98,31 +99,33 @@ final class EsModuleProcessor implements Callback, ModuleProcessor {
    * error if an import attempts to use an ambiguous name. But just having ambiguous names is not
    * itself an error.
    */
-  static final DiagnosticType AMBIGUOUS_EXPORT_DEFINITION =
+  public static final DiagnosticType AMBIGUOUS_EXPORT_DEFINITION =
       DiagnosticType.warning("JSC_AMBIGUOUS_EXPORT_DEFINITION", "The export \"{0}\" is ambiguous.");
 
-  static final DiagnosticType CYCLIC_EXPORT_DEFINITION =
+  public static final DiagnosticType CYCLIC_EXPORT_DEFINITION =
       DiagnosticType.error(
           "JSC_CYCLIC_EXPORT_DEFINITION", "Cyclic export detected while resolving name \"{0}\".");
 
   // Note: We only check for duplicate exports, not imports. Imports cannot be shadowed (by any
   // other binding, including other imports) and so we check that in VariableReferenceCheck.
-  static final DiagnosticType DUPLICATE_EXPORT =
+  public static final DiagnosticType DUPLICATE_EXPORT =
       DiagnosticType.error("JSC_DUPLICATE_EXPORT", "Duplicate export of \"{0}\".");
 
-  static final DiagnosticType DOES_NOT_HAVE_EXPORT =
-      DiagnosticType.error(
-          "JSC_DOES_NOT_HAVE_EXPORT", "Requested module does not have an export \"{0}\".");
-
-  static final DiagnosticType IMPORTED_AMBIGUOUS_EXPORT =
+  public static final DiagnosticType IMPORTED_AMBIGUOUS_EXPORT =
       DiagnosticType.error(
           "JSC_IMPORTED_AMBIGUOUS_EXPORT", "The requested name \"{0}\" is ambiguous.");
 
-  static final DiagnosticType NAMESPACE_IMPORT_CANNOT_USE_STAR =
+  public static final DiagnosticType NAMESPACE_IMPORT_CANNOT_USE_STAR =
       DiagnosticType.error(
           "JSC_NAMESPACE_IMPORT_CANNOT_USE_STAR",
           "Namespace imports ('goog:some.Namespace') cannot use import * as. "
               + "Did you mean to import {0} from ''{1}'';?");
+
+  public static final DiagnosticType CANNOT_PATH_IMPORT_CLOSURE_FILE =
+      DiagnosticType.error(
+          "JSC_CANNOT_PATH_IMPORT_CLOSURE_FILE",
+          "Cannot import Closure files by path. Use either import 'goog:namespace' or"
+              + " goog.require('namespace')");
 
   /**
    * Marks all exports that are mutated in an inner scope as mutable.
@@ -351,8 +354,8 @@ final class EsModuleProcessor implements Callback, ModuleProcessor {
     }
 
     @Override
-    public boolean isEsModule() {
-      return true;
+    ModuleMetadata metadata() {
+      return metadata;
     }
 
     /** A map from import bound name to binding. */
@@ -400,7 +403,21 @@ final class EsModuleProcessor implements Callback, ModuleProcessor {
         return ResolveExportResult.ERROR;
       } else {
         boolean importStar = i.importName().equals("*");
-        if (importStar || (i.importName().equals(Export.DEFAULT) && !requested.isEsModule())) {
+        if (importStar
+            || (i.importName().equals(Export.DEFAULT)
+                && (requested.metadata().isGoogProvide() || requested.metadata().isGoogModule()))) {
+          if (!GoogEsImports.isGoogImportSpecifier(i.moduleRequest())
+              && (requested.metadata().isGoogModule() || requested.metadata().isGoogProvide())) {
+            compiler.report(
+                JSError.make(
+                    path.toString(),
+                    i.importNode().getLineno(),
+                    i.importNode().getCharno(),
+                    CANNOT_PATH_IMPORT_CLOSURE_FILE,
+                    i.localName(),
+                    i.moduleRequest()));
+            return ResolveExportResult.ERROR;
+          }
           if (importStar && GoogEsImports.isGoogImportSpecifier(i.moduleRequest())) {
             compiler.report(
                 JSError.make(
@@ -412,9 +429,12 @@ final class EsModuleProcessor implements Callback, ModuleProcessor {
                     i.moduleRequest()));
             return ResolveExportResult.ERROR;
           }
+          String closureNamespace =
+              GoogEsImports.isGoogImportSpecifier(i.moduleRequest())
+                  ? GoogEsImports.getClosureIdFromGoogImportSpecifier(i.moduleRequest())
+                  : null;
           return ResolveExportResult.of(
-              Binding.from(
-                  requested.resolve(moduleRequestResolver, i.moduleRequest()), i.nameNode()));
+              Binding.from(requested.metadata(), closureNamespace, i.nameNode()));
         } else {
           ResolveExportResult result =
               requested.resolveExport(
@@ -443,7 +463,7 @@ final class EsModuleProcessor implements Callback, ModuleProcessor {
             return ResolveExportResult.ERROR;
           }
           Node forSourceInfo = i.nameNode() == null ? i.importNode() : i.nameNode();
-          return result.withSource(forSourceInfo);
+          return result.copy(forSourceInfo, Binding.CreatedBy.IMPORT);
         }
       }
     }
@@ -480,7 +500,7 @@ final class EsModuleProcessor implements Callback, ModuleProcessor {
         UnresolvedModule requested = moduleRequestResolver.resolve(e);
 
         if (requested != null) {
-          if (requested.isEsModule()) {
+          if (requested.metadata().isEs6Module()) {
             for (String n : requested.getExportedNames(moduleRequestResolver, visited)) {
               // Default exports are not exported with export *.
               if (!Export.DEFAULT.equals(n) && !exportedNames.contains(n)) {
@@ -545,7 +565,7 @@ final class EsModuleProcessor implements Callback, ModuleProcessor {
             // import whatever from 'mod';
             // export { whatever };
             return resolveImport(moduleRequestResolver, e.localName(), resolveSet, exportStarSet)
-                .withSource(e.nameNode());
+                .copy(e.nameNode(), Binding.CreatedBy.EXPORT);
           } else {
             UnresolvedModule requested = moduleRequestResolver.resolve(e);
 
@@ -578,7 +598,7 @@ final class EsModuleProcessor implements Callback, ModuleProcessor {
                         IMPORTED_AMBIGUOUS_EXPORT,
                         e.importName()));
               }
-              return result.withSource(e.nameNode());
+              return result.copy(e.nameNode(), Binding.CreatedBy.EXPORT);
             }
           }
         }
@@ -615,7 +635,7 @@ final class EsModuleProcessor implements Callback, ModuleProcessor {
           } else {
             if (starResolution == null) {
               // First time finding something, not ambiguous.
-              starResolution = resolution.withSource(e.exportNode());
+              starResolution = resolution.copy(e.exportNode(), Binding.CreatedBy.EXPORT);
             } else {
               // Second time finding something, might be ambiguous!
               // Not ambiguous if it is the same export (same module and export name).
@@ -878,7 +898,7 @@ final class EsModuleProcessor implements Callback, ModuleProcessor {
               .localName(localName)
               .modulePath(t.getInput().getPath())
               .importNode(importNode)
-              .nameNode(child.getFirstChild())
+              .nameNode(child.getSecondChild())
               .build());
     }
   }

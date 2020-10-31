@@ -261,8 +261,9 @@ public final class GatherModuleMetadata implements HotSwapCompilerPass {
     @Override
     public void visit(NodeTraversal t, Node n, Node parent) {
       if (processCommonJsModules && currentModule != null && currentModule.isScript()) {
-        if (ProcessCommonJSModules.isCommonJsExport(t, n, moduleResolutionMode)
-            || ProcessCommonJSModules.isCommonJsImport(n, moduleResolutionMode)) {
+        // A common JS import (call to "require") does not force a module to be rewritten as
+        // commonJS. Only an export statement.
+        if (ProcessCommonJSModules.isCommonJsExport(t, n, moduleResolutionMode)) {
           currentModule.moduleType(ModuleType.COMMON_JS, t, n);
           return;
         }
@@ -384,14 +385,17 @@ public final class GatherModuleMetadata implements HotSwapCompilerPass {
         if (n.hasTwoChildren() && n.getLastChild().isString()) {
           currentModule
               .metadataBuilder
-              .requiredGoogNamespacesBuilder()
+              .stronglyRequiredGoogNamespacesBuilder()
               .add(n.getLastChild().getString());
         } else {
           t.report(n, INVALID_REQUIRE_NAMESPACE);
         }
       } else if (getprop.matchesQualifiedName(GOOG_REQUIRE_TYPE)) {
         if (n.hasTwoChildren() && n.getLastChild().isString()) {
-          currentModule.metadataBuilder.requiredTypesBuilder().add(n.getLastChild().getString());
+          currentModule
+              .metadataBuilder
+              .weaklyRequiredGoogNamespacesBuilder()
+              .add(n.getLastChild().getString());
         } else {
           t.report(n, INVALID_REQUIRE_TYPE);
         }
@@ -411,12 +415,15 @@ public final class GatherModuleMetadata implements HotSwapCompilerPass {
     private void addNamespace(
         ModuleMetadataBuilder module, String namespace, NodeTraversal t, Node n) {
       ModuleType existingType = null;
+      String existingFileSource = null;
       if (module.googNamespaces.contains(namespace)) {
         existingType = module.metadataBuilder.moduleType();
+        existingFileSource = t.getSourceName();
       } else {
         ModuleMetadata existingModule = modulesByGoogNamespace.get(namespace);
         if (existingModule != null) {
           existingType = existingModule.moduleType();
+          existingFileSource = existingModule.rootNode().getSourceFileName();
         }
       }
       currentModule.googNamespaces.add(namespace);
@@ -425,10 +432,10 @@ public final class GatherModuleMetadata implements HotSwapCompilerPass {
           case ES6_MODULE:
           case GOOG_MODULE:
           case LEGACY_GOOG_MODULE:
-            t.report(n, ClosureRewriteModule.DUPLICATE_MODULE, namespace);
+            t.report(n, ClosurePrimitiveErrors.DUPLICATE_MODULE, namespace, existingFileSource);
             return;
           case GOOG_PROVIDE:
-            t.report(n, ClosureRewriteModule.DUPLICATE_NAMESPACE, namespace);
+            t.report(n, ClosurePrimitiveErrors.DUPLICATE_NAMESPACE, namespace, existingFileSource);
             return;
           case COMMON_JS:
           case SCRIPT:

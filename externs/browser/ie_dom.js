@@ -121,14 +121,6 @@ XMLDOMDocument.prototype.abort = function() {};
 XMLDOMDocument.prototype.createNode = function(type, name, namespaceURI) {};
 
 /**
- * @param {string} xmlSource
- * @return {undefined}
- * @see http://msdn.microsoft.com/en-us/library/ms762722(VS.85).aspx
- * @override
- */
-XMLDOMDocument.prototype.load = function(xmlSource) {};
-
-/**
  * @param {string} xmlString
  * @return {boolean}
  * @see http://msdn.microsoft.com/en-us/library/ms754585(VS.85).aspx
@@ -185,19 +177,6 @@ Node.prototype.document;
  */
 Node.prototype.insertAdjacentHTML = function(sWhere, sText) {};
 
-
-/**
- * Inserts the given HTML Element into the node at the location.
- * @param {string} sWhere Where to insert the HTML text, one of 'beforeBegin',
- *     'afterBegin', 'beforeEnd', 'afterEnd'.
- * @param {!Element} sElement DOM Element to insert.
- * @see https://developer.mozilla.org/en-US/docs/Web/API/Element/insertAdjacentElement
- * @return {?Element} The element that was inserted, or null, if the
- *     insertion failed.
- */
-Node.prototype.insertAdjacentElement = function(sWhere, sElement) {};
-
-
 /**
  * @type {*}
  * @see http://msdn.microsoft.com/en-us/library/ms762308(VS.85).aspx
@@ -215,12 +194,6 @@ Node.prototype.nodeTypeString;
  * @see http://msdn.microsoft.com/en-us/library/ms762237(VS.85).aspx
  */
 Node.prototype.parsed;
-
-/**
- * @type {Element}
- * @see http://msdn.microsoft.com/en-us/library/ms534327(VS.85).aspx
- */
-Node.prototype.parentElement;
 
 /**
  * @type {boolean}
@@ -313,12 +286,6 @@ ClipboardData.prototype.setData = function(type, data) {};
 ClipboardData.prototype.getData = function(type) { };
 
 /**
- * @type {!Window}
- * @see https://developer.mozilla.org/en/DOM/window
- */
-var window;
-
-/**
  * @see http://msdn.microsoft.com/en-us/library/ms535220(VS.85).aspx
  * @type {ClipboardData}
  */
@@ -402,64 +369,11 @@ Window.prototype.detachEvent;
  */
 Window.prototype.execScript;
 
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms536425(VS.85).aspx
- */
-Window.prototype.focus;
-
-/**
- * @param {number} x
- * @param {number} y
- * @see http://msdn.microsoft.com/en-us/library/ms536618(VS.85).aspx
- * @return {undefined}
- */
-Window.prototype.moveBy = function(x, y) {};
-
-/**
- * @param {number} x
- * @param {number} y
- * @see http://msdn.microsoft.com/en-us/library/ms536626(VS.85).aspx
- * @return {undefined}
- */
-Window.prototype.moveTo = function(x, y) {};
 
 /**
  * @see http://msdn.microsoft.com/en-us/library/ms536638(VS.85).aspx
  */
 Window.prototype.navigate;
-
-/**
- * @param {*=} opt_url
- * @param {string=} opt_windowName
- * @param {string=} opt_windowFeatures
- * @param {boolean=} opt_replace
- * @return {Window}
- * @see http://msdn.microsoft.com/en-us/library/ms536651(VS.85).aspx
- */
-Window.prototype.open = function(opt_url, opt_windowName, opt_windowFeatures,
-                                 opt_replace) {};
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms536672(VS.85).aspx
- * @return {undefined}
- */
-Window.prototype.print = function() {};
-
-/**
- * @param {number} width
- * @param {number} height
- * @see http://msdn.microsoft.com/en-us/library/ms536722(VS.85).aspx
- * @return {undefined}
- */
-Window.prototype.resizeBy = function(width, height) {};
-
-/**
- * @param {number} width
- * @param {number} height
- * @see http://msdn.microsoft.com/en-us/library/ms536723(VS.85).aspx
- * @return {undefined}
- */
-Window.prototype.resizeTo = function(width, height) {};
 
 /**
  * @see http://msdn.microsoft.com/en-us/library/ms536738(VS.85).aspx
@@ -487,34 +401,6 @@ Window.prototype.external;
  * @const {!Object}
  */
 Window.prototype.msCrypto;
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms535864(VS.85).aspx
- * @param {number|string} delta The number of entries to go back, or
- *     the URL to which to go back. (URL form is supported only in IE)
- * @return {undefined}
- */
-History.prototype.go = function(delta) {};
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms535864(VS.85).aspx
- * @param {number=} opt_distance The number of entries to go back
- *     (Mozilla doesn't support distance -- use #go instead)
- * @return {undefined}
- */
-History.prototype.back = function(opt_distance) {};
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms535864(VS.85).aspx
- * @type {number}
- */
-History.prototype.length;
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms535864(VS.85).aspx
- * @return {undefined}
- */
-History.prototype.forward = function() {};
 
 /**
  * @type {boolean}
@@ -776,24 +662,6 @@ TextRange.prototype.select = function() {};
 TextRange.prototype.setEndPoint;
 
 /**
- * @return {undefined}
- * @see http://msdn.microsoft.com/en-us/library/ms536418(VS.85).aspx
- */
-Selection.prototype.clear = function() {};
-
-/**
- * @return {TextRange|ControlRange}
- * @see http://msdn.microsoft.com/en-us/library/ms536394(VS.85).aspx
- */
-Selection.prototype.createRange = function() {};
-
-/**
- * @return {Array<TextRange>}
- * @see http://msdn.microsoft.com/en-us/library/ms536396(VS.85).aspx
- */
-Selection.prototype.createRangeCollection = function() {};
-
-/**
  * @constructor
  * @see http://msdn.microsoft.com/en-us/library/ms537447(VS.85).aspx
  */
@@ -806,12 +674,6 @@ Document.prototype.loadXML;
 // http://msdn.microsoft.com/en-us/library/ms531073(VS.85).aspx
 
 /**
- * @type {!Element}
- * @see http://msdn.microsoft.com/en-us/library/ms533065(VS.85).aspx
- */
-Document.prototype.activeElement;
-
-/**
  * @see http://msdn.microsoft.com/en-us/library/ms533553(VS.85).aspx
  */
 Document.prototype.charset;
@@ -820,11 +682,6 @@ Document.prototype.charset;
  * @see http://msdn.microsoft.com/en-us/library/ms533693(VS.85).aspx
  */
 Document.prototype.cookie;
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms533714(VS.85).aspx
- */
-Document.prototype.defaultCharset;
 
 /**
  * @see http://msdn.microsoft.com/en-us/library/ms533731(VS.85).aspx
@@ -872,12 +729,6 @@ Document.prototype.protocol;
  * @see http://msdn.microsoft.com/en-us/library/ms534359(VS.85).aspx
  */
 HTMLDocument.prototype.readyState;
-
-/**
- * @type {Selection}
- * @see http://msdn.microsoft.com/en-us/library/ms535869(VS.85).aspx
- */
-Document.prototype.selection;
 
 /**
  * @see http://msdn.microsoft.com/en-us/library/ms534704(VS.85).aspx
@@ -929,12 +780,6 @@ Document.prototype.detachEvent;
  * @see http://msdn.microsoft.com/en-us/library/ms536425(VS.85).aspx
  */
 Document.prototype.focus;
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms536447(VS.85).aspx
- * @return {boolean}
- */
-Document.prototype.hasFocus = function() {};
 
 /**
  * @see http://msdn.microsoft.com/en-us/library/ms536614(VS.85).aspx
@@ -1069,6 +914,12 @@ Element.prototype.fireEvent;
 Element.prototype.hideFocus;
 
 /**
+ * @type {string}
+ * @implicitCast
+ *
+ * TODO(lharker): remove the @implicitCast to enforce assigning an explicit
+ * string to innerText instead of relying on coercion.
+ *
  * @see http://msdn.microsoft.com/en-us/library/ms533899.aspx
  */
 Element.prototype.innerText;
@@ -1116,19 +967,6 @@ Element.prototype.onmouseenter;
  * @see http://msdn.microsoft.com/en-us/library/ms536946(VS.85).aspx
  */
 Element.prototype.onmouseleave;
-
-/**
- * @type {?function(Event)}
- * @see http://msdn.microsoft.com/en-us/library/ms536969(VS.85).aspx
- */
-Element.prototype.onselectstart;
-
-/**
- * @type {string}
- * @implicitCast
- * @see http://msdn.microsoft.com/en-us/library/aa752326(VS.85).aspx
- */
-Element.prototype.outerHTML;
 
 /**
  * @see http://msdn.microsoft.com/en-us/library/ms536689(VS.85).aspx
@@ -1230,96 +1068,6 @@ function AlphaImageLoaderFilter() {}
  * @type {string}
  */
 AlphaImageLoaderFilter.prototype.sizingMethod;
-
-/**
- * @constructor
- * @see http://msdn.microsoft.com/en-us/library/ms535866(VS.85).aspx
- */
-function Location() {}
-
-/**
- * @see http://trac.webkit.org/changeset/113945
- * @type {DOMStringList}
- */
-Location.prototype.ancestorOrigins;
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms533775(VS.85).aspx
- * @type {string}
- */
-Location.prototype.hash;
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms533784(VS.85).aspx
- * @type {string}
- */
-Location.prototype.host;
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms533785(VS.85).aspx
- * @type {string}
- */
-Location.prototype.hostname;
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms533867(VS.85).aspx
- * @implicitCast
- * @type {string}
- */
-Location.prototype.href;
-
-/**
- * @see https://docs.google.com/document/view?id=1r_VTFKApVOaNIkocrg0z-t7lZgzisTuGTXkdzAk4gLU&hl=en
- * @type {string}
- */
-Location.prototype.origin;
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms534332(VS.85).aspx
- * @type {string}
- */
-Location.prototype.pathname;
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms534342(VS.85).aspx
- * @type {string}
- */
-Location.prototype.port;
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms534353(VS.85).aspx
- * @type {string}
- */
-Location.prototype.protocol;
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms534620(VS.85).aspx
- * @type {string}
- */
-Location.prototype.search;
-
-/**
- * @see http://msdn.microsoft.com/en-us/library/ms536342(VS.85).aspx
- * @param {!TrustedURL|string} url
- * @return {undefined}
- */
-Location.prototype.assign = function(url) {};
-
-/**
- * @param {boolean=} opt_forceReload If true, reloads the page from
- *     the server. Defaults to false.
- * @see http://msdn.microsoft.com/en-us/library/ms536691(VS.85).aspx
- * @return {undefined}
- */
-Location.prototype.reload = function(opt_forceReload) {};
-
-/**
- * @param {!TrustedURL|string} url
- * @see http://msdn.microsoft.com/en-us/library/ms536712(VS.85).aspx
- * @return {undefined}
- */
-Location.prototype.replace = function(url) {};
-
 
 // For IE, returns an object representing key-value pairs for all the global
 // variables prefixed with str, e.g. test*

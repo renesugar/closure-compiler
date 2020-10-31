@@ -26,7 +26,6 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-
 @RunWith(JUnit4.class)
 public final class Es6RewriteModulesToCommonJsModulesTest extends CompilerTestCase {
   private List<String> moduleRoots;
@@ -65,11 +64,6 @@ public final class Es6RewriteModulesToCommonJsModulesTest extends CompilerTestCa
   @Override
   protected CompilerPass getProcessor(Compiler compiler) {
     return new Es6RewriteModulesToCommonJsModules(compiler, "test pragma");
-  }
-
-  @Override
-  protected int getNumRepetitions() {
-    return 1;
   }
 
   @Test

@@ -27,6 +27,7 @@ import javax.annotation.CheckReturnValue;
 
 /**
  * A Truth Subject for FeatureSet. Usage:
+ *
  * <pre>
  *   import static com.google.javascript.jscomp.parsing.parser.testing.FeatureSetSubject.assertFS;
  *   ...
@@ -34,47 +35,58 @@ import javax.annotation.CheckReturnValue;
  *   assertFS(features).containsNoneOf(otherFeatures);
  * </pre>
  */
-public class FeatureSetSubject extends Subject<FeatureSetSubject, FeatureSet> {
+public class FeatureSetSubject extends Subject {
   @CheckReturnValue
   public static FeatureSetSubject assertFS(FeatureSet fs) {
     return assertAbout(FeatureSetSubject::new).that(fs);
   }
 
+  private final FeatureSet actual;
+
   public FeatureSetSubject(FailureMetadata failureMetadata, FeatureSet featureSet) {
     super(failureMetadata, featureSet);
+    this.actual = featureSet;
   }
 
   public void contains(FeatureSet other) {
-    if (!actual().contains(other)) {
+    if (!actual.contains(other)) {
       failWithoutActual(
           simpleFact(
-              lenientFormat("Expected a FeatureSet containing: %s\nBut got: %s", other, actual())));
+              lenientFormat("Expected a FeatureSet containing: %s\nBut got: %s", other, actual)));
     }
   }
 
   public void containsNoneOf(FeatureSet other) {
-    if (!other.without(actual()).equals(other)) {
+    if (!other.without(actual).equals(other)) {
       failWithoutActual(
           simpleFact(
               lenientFormat(
-                  "Expected a FeatureSet containing none of: %s\nBut got: %s", other, actual())));
+                  "Expected a FeatureSet containing none of: %s\nBut got: %s", other, actual)));
     }
   }
 
   public void has(Feature feature) {
-    if (!actual().has(feature)) {
+    if (!actual.has(feature)) {
       failWithoutActual(
           simpleFact(
-              lenientFormat("Expected a FeatureSet that has: %s\nBut got: %s", feature, actual())));
+              lenientFormat("Expected a FeatureSet that has: %s\nBut got: %s", feature, actual)));
     }
   }
 
   public void doesNotHave(Feature feature) {
-    if (actual().has(feature)) {
+    if (actual.has(feature)) {
       failWithoutActual(
           simpleFact(
               lenientFormat(
-                  "Expected a FeatureSet that doesn't have: %s\nBut got: %s", feature, actual())));
+                  "Expected a FeatureSet that doesn't have: %s\nBut got: %s", feature, actual)));
+    }
+  }
+
+  public void equals(FeatureSet other) {
+    if (!actual.equals(other)) {
+      failWithoutActual(
+          simpleFact(
+              lenientFormat("Expected a FeatureSet equal to: %s\nBut got: %s", other, actual)));
     }
   }
 }

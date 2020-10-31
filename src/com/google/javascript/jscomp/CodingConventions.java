@@ -19,6 +19,7 @@ package com.google.javascript.jscomp;
 import static com.google.common.base.Preconditions.checkState;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.errorprone.annotations.Immutable;
 import com.google.javascript.rhino.ClosurePrimitive;
 import com.google.javascript.rhino.Node;
@@ -28,13 +29,11 @@ import com.google.javascript.rhino.jstype.FunctionType;
 import com.google.javascript.rhino.jstype.JSTypeRegistry;
 import com.google.javascript.rhino.jstype.ObjectType;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Helper classes for dealing with coding conventions.
- * @author nicksantos@google.com (Nick Santos)
  */
 public final class CodingConventions {
 
@@ -66,12 +65,6 @@ public final class CodingConventions {
     }
     // n is a call
     return n.getFirstChild().matchesQualifiedName(alwaysThrowsFunctionName);
-  }
-
-  static boolean isAliasingGlobalThis(CodingConvention convention, Node n) {
-    return n.isAssign()
-        && n.getFirstChild().matchesQualifiedName(convention.getGlobalObject())
-        && n.getLastChild().isThis();
   }
 
   /**
@@ -129,7 +122,7 @@ public final class CodingConventions {
 
     @Override
     public final boolean isExported(String name) {
-      return isExported(name, false) || isExported(name, true);
+      return CodingConvention.super.isExported(name);
     }
 
     @Override
@@ -267,11 +260,6 @@ public final class CodingConventions {
     }
 
     @Override
-    public boolean isAliasingGlobalThis(Node n) {
-      return nextConvention.isAliasingGlobalThis(n);
-    }
-
-    @Override
     public Collection<AssertionFunctionSpec> getAssertionFunctions() {
       return nextConvention.getAssertionFunctions();
     }
@@ -346,15 +334,13 @@ public final class CodingConventions {
 
     @Override
     public boolean isOptionalParameter(Node parameter) {
-      // be as lax as possible, but this must be mutually exclusive from
-      // var_args parameters.
-      return parameter.isOptionalArg();
+      return false;
     }
 
     @Override
     public boolean isVarArgsParameter(Node parameter) {
       // be as lax as possible
-      return parameter.isRest() || parameter.isVarArgs();
+      return parameter.isRest();
     }
 
     @Override
@@ -380,8 +366,8 @@ public final class CodingConventions {
     }
 
     @Override
-    public boolean isExported(String name) {
-      return isExported(name, false) || isExported(name, true);
+    public final boolean isExported(String name) {
+      return CodingConvention.super.isExported(name);
     }
 
     @Override
@@ -403,8 +389,8 @@ public final class CodingConventions {
     public SubclassRelationship getClassesDefinedByCall(Node callNode) {
       Node callName = callNode.getFirstChild();
       if ((callName.matchesQualifiedName("$jscomp.inherits")
-          || callName.matchesQualifiedName("$jscomp$inherits"))
-          && callNode.getChildCount() == 3) {
+              || callName.matchesName("$jscomp$inherits"))
+          && callNode.hasXChildren(3)) {
         Node subclass = callName.getNext();
         Node superclass = subclass.getNext();
         // The StripCode pass may create $jscomp.inherits calls with NULL arguments.
@@ -526,11 +512,6 @@ public final class CodingConventions {
     }
 
     @Override
-    public boolean isAliasingGlobalThis(Node n) {
-      return CodingConventions.isAliasingGlobalThis(this, n);
-    }
-
-    @Override
     public boolean isPropertyTestFunction(Node call) {
       return call.getFirstChild().matchesQualifiedName("Array.isArray");
     }
@@ -551,8 +532,14 @@ public final class CodingConventions {
     }
 
     @Override
-    public Collection<AssertionFunctionSpec> getAssertionFunctions() {
-      return Collections.emptySet();
+    public ImmutableSet<AssertionFunctionSpec> getAssertionFunctions() {
+      return ImmutableSet.of(
+          AssertionFunctionSpec.forTruthy()
+              .setClosurePrimitive(ClosurePrimitive.ASSERTS_TRUTHY)
+              .build(),
+          AssertionFunctionSpec.forMatchesReturn()
+              .setClosurePrimitive(ClosurePrimitive.ASSERTS_MATCHES_RETURN)
+              .build());
     }
 
     @Override

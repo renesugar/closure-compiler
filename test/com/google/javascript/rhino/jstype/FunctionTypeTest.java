@@ -39,15 +39,20 @@
 package com.google.javascript.rhino.jstype;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.javascript.rhino.testing.Asserts.assertThrows;
+import static com.google.javascript.rhino.testing.TypeSubject.assertType;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
+import com.google.common.testing.EqualsTester;
+import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
 import com.google.javascript.rhino.testing.Asserts;
 import com.google.javascript.rhino.testing.BaseJSTypeTestCase;
+import com.google.javascript.rhino.testing.MapBasedScope;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -61,18 +66,22 @@ import org.junit.runners.JUnit4;
 public class FunctionTypeTest extends BaseJSTypeTestCase {
   @Test
   public void testDefaultReturnType() {
-    FunctionType f = new FunctionBuilder(registry).build();
+    FunctionType f = FunctionType.builder(registry).build();
     assertThat(f.getReturnType()).isEqualTo(UNKNOWN_TYPE);
   }
 
   @Test
   public void testSupAndInfOfReturnTypes() {
-    FunctionType retString = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters())
-        .withInferredReturnType(STRING_TYPE).build();
-    FunctionType retNumber = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters())
-        .withReturnType(NUMBER_TYPE).build();
+    FunctionType retString =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters())
+            .withInferredReturnType(STRING_TYPE)
+            .build();
+    FunctionType retNumber =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters())
+            .withReturnType(NUMBER_TYPE)
+            .build();
 
     assertLeastSupertype(
         "function(): (number|string)", retString, retNumber);
@@ -89,12 +98,16 @@ public class FunctionTypeTest extends BaseJSTypeTestCase {
 
   @Test
   public void testSupAndInfOfReturnTypesWithDifferentParams() {
-    FunctionType retString = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters(NUMBER_TYPE))
-        .withInferredReturnType(STRING_TYPE).build();
-    FunctionType retNumber = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters())
-        .withReturnType(NUMBER_TYPE).build();
+    FunctionType retString =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters(NUMBER_TYPE))
+            .withInferredReturnType(STRING_TYPE)
+            .build();
+    FunctionType retNumber =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters())
+            .withReturnType(NUMBER_TYPE)
+            .build();
 
     assertLeastSupertype(
         "Function", retString, retNumber);
@@ -104,12 +117,16 @@ public class FunctionTypeTest extends BaseJSTypeTestCase {
 
   @Test
   public void testSupAndInfWithDifferentParams() {
-    FunctionType retString = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters(NUMBER_TYPE))
-        .withReturnType(STRING_TYPE).build();
-    FunctionType retNumber = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters(STRING_TYPE))
-        .withReturnType(NUMBER_TYPE).build();
+    FunctionType retString =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters(NUMBER_TYPE))
+            .withReturnType(STRING_TYPE)
+            .build();
+    FunctionType retNumber =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters(STRING_TYPE))
+            .withReturnType(NUMBER_TYPE)
+            .build();
 
     assertLeastSupertype(
         "Function", retString, retNumber);
@@ -119,14 +136,18 @@ public class FunctionTypeTest extends BaseJSTypeTestCase {
 
   @Test
   public void testSupAndInfWithDifferentThisTypes() {
-    FunctionType retString = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters())
-        .withTypeOfThis(OBJECT_TYPE)
-        .withReturnType(STRING_TYPE).build();
-    FunctionType retNumber = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters())
-        .withTypeOfThis(DATE_TYPE)
-        .withReturnType(NUMBER_TYPE).build();
+    FunctionType retString =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters())
+            .withTypeOfThis(OBJECT_TYPE)
+            .withReturnType(STRING_TYPE)
+            .build();
+    FunctionType retNumber =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters())
+            .withTypeOfThis(DATE_TYPE)
+            .withReturnType(NUMBER_TYPE)
+            .build();
 
     assertLeastSupertype(
         "function(this:Object): (number|string)", retString, retNumber);
@@ -136,14 +157,18 @@ public class FunctionTypeTest extends BaseJSTypeTestCase {
 
   @Test
   public void testSupAndInfWithDifferentThisTypes2() {
-    FunctionType retString = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters())
-        .withTypeOfThis(ARRAY_TYPE)
-        .withReturnType(STRING_TYPE).build();
-    FunctionType retNumber = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters())
-        .withTypeOfThis(DATE_TYPE)
-        .withReturnType(NUMBER_TYPE).build();
+    FunctionType retString =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters())
+            .withTypeOfThis(ARRAY_TYPE)
+            .withReturnType(STRING_TYPE)
+            .build();
+    FunctionType retNumber =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters())
+            .withTypeOfThis(DATE_TYPE)
+            .withReturnType(NUMBER_TYPE)
+            .build();
 
     assertLeastSupertype(
         "function(this:(Array|Date)): (number|string)", retString, retNumber);
@@ -153,12 +178,16 @@ public class FunctionTypeTest extends BaseJSTypeTestCase {
 
   @Test
   public void testSupAndInfOfReturnTypesWithNumOfParams() {
-    FunctionType twoNumbers = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters(NUMBER_TYPE, NUMBER_TYPE))
-        .withReturnType(BOOLEAN_TYPE).build();
-    FunctionType oneNumber = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters(NUMBER_TYPE))
-        .withReturnType(BOOLEAN_TYPE).build();
+    FunctionType twoNumbers =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters(NUMBER_TYPE, NUMBER_TYPE))
+            .withReturnType(BOOLEAN_TYPE)
+            .build();
+    FunctionType oneNumber =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters(NUMBER_TYPE))
+            .withReturnType(BOOLEAN_TYPE)
+            .build();
 
     assertLeastSupertype(
         "function(number, number): boolean", twoNumbers, oneNumber);
@@ -170,68 +199,135 @@ public class FunctionTypeTest extends BaseJSTypeTestCase {
   public void testSubtypeWithInterfaceThisType() {
     FunctionType iface = registry.createInterfaceType("I", null,
         ImmutableList.<TemplateType>of(), false);
-    FunctionType ifaceReturnBoolean = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters())
-        .withTypeOfThis(iface.getInstanceType())
-        .withReturnType(BOOLEAN_TYPE).build();
-    FunctionType objReturnBoolean = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters())
-        .withTypeOfThis(OBJECT_TYPE)
-        .withReturnType(BOOLEAN_TYPE).build();
+    FunctionType ifaceReturnBoolean =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters())
+            .withTypeOfThis(iface.getInstanceType())
+            .withReturnType(BOOLEAN_TYPE)
+            .build();
+    FunctionType objReturnBoolean =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters())
+            .withTypeOfThis(OBJECT_TYPE)
+            .withReturnType(BOOLEAN_TYPE)
+            .build();
     assertThat(objReturnBoolean.isSubtype(ifaceReturnBoolean)).isTrue();
   }
 
   @Test
   public void testOrdinaryFunctionPrototype() {
-    FunctionType oneNumber = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters(NUMBER_TYPE))
-        .withReturnType(BOOLEAN_TYPE).build();
+    FunctionType oneNumber =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters(NUMBER_TYPE))
+            .withReturnType(BOOLEAN_TYPE)
+            .build();
     assertThat(oneNumber.getOwnPropertyNames()).isEmpty();
   }
 
   @Test
   public void testCtorWithPrototypeSet() {
-    FunctionType ctor = registry.createConstructorType("Foo", null, null, null, null, false);
-    assertThat(ctor.getInstanceType().isUnknownType()).isFalse();
+    try (JSTypeResolver.Closer closer = this.registry.getResolver().openForDefinition()) {
+      FunctionType ctor = registry.createConstructorType("Foo", null, null, null, null, false);
+      assertThat(ctor.getInstanceType().isUnknownType()).isFalse();
 
-    Node node = new Node(Token.OBJECTLIT);
-    ctor.defineDeclaredProperty("prototype", UNKNOWN_TYPE, node);
-    assertThat(ctor.getInstanceType().isUnknownType()).isTrue();
+      Node node = new Node(Token.OBJECTLIT);
+      ctor.defineDeclaredProperty("prototype", UNKNOWN_TYPE, node);
+      assertThat(ctor.getInstanceType().isUnknownType()).isTrue();
 
-    assertThat(ctor.getOwnPropertyNames()).isEqualTo(ImmutableSet.<String>of("prototype"));
-    assertThat(ctor.isPropertyTypeInferred("prototype")).isTrue();
-    assertThat(ctor.getPropertyType("prototype").isUnknownType()).isTrue();
+      assertThat(ctor.getOwnPropertyNames()).isEqualTo(ImmutableSet.<String>of("prototype"));
+      assertThat(ctor.isPropertyTypeInferred("prototype")).isTrue();
+      assertThat(ctor.getPropertyType("prototype").isUnknownType()).isTrue();
 
-    assertThat(ctor.getPropertyNode("prototype")).isEqualTo(node);
+      assertThat(ctor.getPropertyNode("prototype")).isEqualTo(node);
+    }
   }
 
   @Test
   public void testCtorWithInstanceInheritance() {
-    FunctionType fooCtor = new FunctionBuilder(registry).forConstructor().withName("Foo").build();
-    FunctionType barCtor = new FunctionBuilder(registry).forConstructor().withName("Bar").build();
-    barCtor.setPrototypeBasedOn(fooCtor.getInstanceType());
-    fooCtor.getPrototype().defineDeclaredProperty("bar", STRING_TYPE, null);
+    try (JSTypeResolver.Closer closer = this.registry.getResolver().openForDefinition()) {
+      FunctionType fooCtor =
+          FunctionType.builder(registry).forConstructor().withName("Foo").build();
+      FunctionType barCtor =
+          FunctionType.builder(registry).forConstructor().withName("Bar").build();
+      barCtor.setPrototypeBasedOn(fooCtor.getInstanceType());
+      fooCtor.getPrototype().defineDeclaredProperty("bar", STRING_TYPE, null);
 
-    assertThat(barCtor.getPrototype().getImplicitPrototype()).isEqualTo(fooCtor.getInstanceType());
-    assertThat(fooCtor.getInstanceType().getSlot("bar").getType()).isEqualTo(STRING_TYPE);
+      assertThat(barCtor.getPrototype().getImplicitPrototype())
+          .isEqualTo(fooCtor.getInstanceType());
+      assertThat(fooCtor.getInstanceType().getSlot("bar").getType()).isEqualTo(STRING_TYPE);
+    }
   }
 
   @Test
   public void testCtorWithClassSideInheritance() {
-    FunctionType fooCtor = new FunctionBuilder(registry).forConstructor().withName("Foo").build();
-    // NOTE: FunctionType does not look into the node, only at its token.
-    Node source = new Node(Token.CLASS);
-    FunctionType barCtor =
-        new FunctionBuilder(registry)
-            .withSourceNode(source)
-            .forConstructor()
-            .withName("Bar")
-            .build();
-    barCtor.setPrototypeBasedOn(fooCtor.getInstanceType());
-    fooCtor.defineDeclaredProperty("foo", NUMBER_TYPE, null);
+    try (JSTypeResolver.Closer closer = this.registry.getResolver().openForDefinition()) {
+      FunctionType fooCtor =
+          FunctionType.builder(registry).forConstructor().withName("Foo").build();
+      // NOTE: FunctionType does not look into the node, only at its token.
+      Node source = new Node(Token.CLASS);
+      FunctionType barCtor =
+          FunctionType.builder(registry)
+              .withSourceNode(source)
+              .forConstructor()
+              .withName("Bar")
+              .build();
+      barCtor.setPrototypeBasedOn(fooCtor.getInstanceType());
+      fooCtor.defineDeclaredProperty("foo", NUMBER_TYPE, null);
 
-    assertThat(barCtor.getImplicitPrototype()).isEqualTo(fooCtor);
-    assertThat(barCtor.getSlot("foo").getType()).isEqualTo(NUMBER_TYPE);
+      assertThat(barCtor.getImplicitPrototype()).isEqualTo(fooCtor);
+      assertThat(barCtor.getSlot("foo").getType()).isEqualTo(NUMBER_TYPE);
+    }
+  }
+
+  @Test
+  public void testEqualityOfProxyForCtor() {
+    FunctionType fooCtor;
+    // Bar points to `typeof Foo`.
+    NamedType barType;
+
+    try (JSTypeResolver.Closer closer = this.registry.getResolver().openForDefinition()) {
+      StaticTypedScope emptyScope = new MapBasedScope(ImmutableMap.of());
+      TemplateType key = registry.createTemplateType("KEY");
+      fooCtor =
+          FunctionType.builder(registry)
+              .forConstructor()
+              .withName("Foo")
+              .withTemplateKeys(key)
+              .build();
+      barType = registry.createNamedType(emptyScope, "Bar", "", -1, -1);
+      registry.declareType(emptyScope, "Bar", fooCtor);
+    }
+
+    assertType(fooCtor).isEqualTo(barType);
+    assertType(fooCtor).isSubtypeOf(barType);
+    assertThat(barType.isFunctionType()).isTrue();
+  }
+
+  @Test
+  public void testCtorsSpecializedOnTemplateTypes() {
+    try (JSTypeResolver.Closer closer = this.registry.getResolver().openForDefinition()) {
+      TemplateType key = registry.createTemplateType("KEY");
+      FunctionType fooCtor =
+          FunctionType.builder(registry)
+              .forConstructor()
+              .withName("Foo")
+              .withTemplateKeys(key)
+              .withReturnType(key)
+              .build();
+
+      TemplateTypeReplacer stringReplacer =
+          TemplateTypeReplacer.forInference(registry, ImmutableMap.of(key, STRING_TYPE));
+      TemplateTypeReplacer numberReplacer =
+          TemplateTypeReplacer.forInference(registry, ImmutableMap.of(key, NUMBER_TYPE));
+      JSType fooOfString = fooCtor.visit(stringReplacer).toMaybeFunctionType();
+      JSType fooOfNumber = fooCtor.visit(numberReplacer).toMaybeFunctionType();
+
+      new EqualsTester()
+          .addEqualityGroup(fooCtor)
+          .addEqualityGroup(fooOfString)
+          .addEqualityGroup(fooOfNumber)
+          .testEquals();
+    }
   }
 
   @Test
@@ -313,56 +409,61 @@ public class FunctionTypeTest extends BaseJSTypeTestCase {
   }
 
   @Test
-  public void testIsEquivalentTo() {
-    FunctionType type = new FunctionBuilder(registry).build();
+  public void testequals() {
+    FunctionType type = FunctionType.builder(registry).build();
     assertThat(type.equals(null)).isFalse();
-    assertThat(type.isEquivalentTo(type)).isTrue();
+    assertThat(type.equals(type)).isTrue();
   }
 
   @Test
-  public void testIsEquivalentToParams() {
-    FunctionType oneNum = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters(NUMBER_TYPE))
-        .build();
-    FunctionType optNum = new FunctionBuilder(registry)
-        .withParamsNode(registry.createOptionalParameters(NUMBER_TYPE))
-        .build();
-    FunctionType varNum = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParametersWithVarArgs(NUMBER_TYPE))
-        .build();
+  public void testequalsParams() {
+    FunctionType oneNum =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters(NUMBER_TYPE))
+            .build();
+    FunctionType optNum =
+        FunctionType.builder(registry)
+            .withParameters(registry.createOptionalParameters(NUMBER_TYPE))
+            .build();
+    FunctionType varNum =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParametersWithVarArgs(NUMBER_TYPE))
+            .build();
     Asserts.assertEquivalenceOperations(oneNum, oneNum);
     Asserts.assertEquivalenceOperations(optNum, optNum);
     Asserts.assertEquivalenceOperations(varNum, varNum);
-    assertThat(oneNum.isEquivalentTo(optNum)).isFalse();
-    assertThat(oneNum.isEquivalentTo(varNum)).isFalse();
-    assertThat(optNum.isEquivalentTo(varNum)).isFalse();
+    assertThat(oneNum.equals(optNum)).isFalse();
+    assertThat(oneNum.equals(varNum)).isFalse();
+    assertThat(optNum.equals(varNum)).isFalse();
   }
 
   @Test
   public void testIsEquivalentOptAndVarArgs() {
-    FunctionType varNum = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParametersWithVarArgs(NUMBER_TYPE))
-        .build();
+    FunctionType varNum =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParametersWithVarArgs(NUMBER_TYPE))
+            .build();
 
     FunctionParamBuilder builder = new FunctionParamBuilder(registry);
     builder.addOptionalParams(NUMBER_TYPE);
     builder.addVarArgs(NUMBER_TYPE);
-    FunctionType optAndVarNum = new FunctionBuilder(registry)
-        .withParamsNode(builder.build())
-        .build();
+    FunctionType optAndVarNum =
+        FunctionType.builder(registry).withParameters(builder.build()).build();
 
     // We currently do not consider function(T=, ...T) and function(...T)
     // equivalent. This may change.
-    assertThat(varNum.isEquivalentTo(optAndVarNum)).isFalse();
-    assertThat(optAndVarNum.isEquivalentTo(varNum)).isFalse();
+    assertThat(varNum.equals(optAndVarNum)).isFalse();
+    assertThat(optAndVarNum.equals(varNum)).isFalse();
   }
 
   @Test
   public void testRecursiveFunction() {
     ProxyObjectType loop = new ProxyObjectType(registry, NUMBER_TYPE);
-    FunctionType fn = new FunctionBuilder(registry)
-        .withParamsNode(registry.createParameters(loop))
-        .withReturnType(loop).build();
+    FunctionType fn =
+        FunctionType.builder(registry)
+            .withParameters(registry.createParameters(loop))
+            .withReturnType(loop)
+            .build();
 
     loop.setReferencedType(fn);
     assertThat(fn.toString()).isEqualTo("function(Function): Function");
@@ -372,10 +473,12 @@ public class FunctionTypeTest extends BaseJSTypeTestCase {
 
   @Test
   public void testBindSignature() {
-    FunctionType fn = new FunctionBuilder(registry)
-        .withTypeOfThis(DATE_TYPE)
-        .withParamsNode(registry.createParameters(STRING_TYPE, NUMBER_TYPE))
-        .withReturnType(BOOLEAN_TYPE).build();
+    FunctionType fn =
+        FunctionType.builder(registry)
+            .withTypeOfThis(DATE_TYPE)
+            .withParameters(registry.createParameters(STRING_TYPE, NUMBER_TYPE))
+            .withReturnType(BOOLEAN_TYPE)
+            .build();
 
     assertThat(fn.getPropertyType("bind").toString())
         .isEqualTo(
@@ -384,10 +487,12 @@ public class FunctionTypeTest extends BaseJSTypeTestCase {
 
   @Test
   public void testCallSignature1() {
-    FunctionType fn = new FunctionBuilder(registry)
-        .withTypeOfThis(DATE_TYPE)
-        .withParamsNode(registry.createParameters(STRING_TYPE, NUMBER_TYPE))
-        .withReturnType(BOOLEAN_TYPE).build();
+    FunctionType fn =
+        FunctionType.builder(registry)
+            .withTypeOfThis(DATE_TYPE)
+            .withParameters(registry.createParameters(STRING_TYPE, NUMBER_TYPE))
+            .withReturnType(BOOLEAN_TYPE)
+            .build();
 
     assertThat(fn.getPropertyType("call").toString())
         .isEqualTo("function((Date|null|undefined), string, number): boolean");
@@ -395,10 +500,12 @@ public class FunctionTypeTest extends BaseJSTypeTestCase {
 
   @Test
   public void testCallSignature2() {
-    FunctionType fn = new FunctionBuilder(registry)
-        .withTypeOfThis(DATE_TYPE)
-        .withParamsNode(registry.createParameters())
-        .withReturnType(BOOLEAN_TYPE).build();
+    FunctionType fn =
+        FunctionType.builder(registry)
+            .withTypeOfThis(DATE_TYPE)
+            .withParameters(registry.createParameters())
+            .withReturnType(BOOLEAN_TYPE)
+            .build();
 
     assertThat(fn.getPropertyType("call").toString()).isEqualTo("function((Date|null)=): boolean");
   }
@@ -406,10 +513,12 @@ public class FunctionTypeTest extends BaseJSTypeTestCase {
   @Test
   public void testTemplatedFunctionDerivedFunctions() {
     TemplateType template = registry.createTemplateType("T");
-    FunctionType fn = new FunctionBuilder(registry)
-      .withTypeOfThis(template)
-      .withTemplateKeys(ImmutableList.of(template))
-      .withReturnType(BOOLEAN_TYPE).build();
+    FunctionType fn =
+        FunctionType.builder(registry)
+            .withTypeOfThis(template)
+            .withTemplateKeys(ImmutableList.of(template))
+            .withReturnType(BOOLEAN_TYPE)
+            .build();
 
     assertThat(fn.getPropertyType("call").getTemplateTypeMap().getTemplateKeys().toString())
         .isEqualTo("[T]");
@@ -422,11 +531,53 @@ public class FunctionTypeTest extends BaseJSTypeTestCase {
   }
 
   @Test
-  public void testPrint() {
-    FunctionType fn = new FunctionBuilder(registry)
-      .withTypeOfThis(new TemplateType(registry, "T"))
-      .withReturnType(BOOLEAN_TYPE).build();
+  public void testPrint_ordinaryFunction_withTemplatedThis() {
+    FunctionType fn =
+        FunctionType.builder(registry)
+            .withTypeOfThis(new TemplateType(registry, "T"))
+            .withReturnType(BOOLEAN_TYPE)
+            .build();
     assertThat(fn.toString()).isEqualTo("function(this:T, ...?): boolean");
+  }
+
+  @Test
+  public void testPrint_constructorFunction_withoutSource() {
+    try (JSTypeResolver.Closer closer = this.registry.getResolver().openForDefinition()) {
+      FunctionType fn = FunctionType.builder(registry).forConstructor().withName("Foo").build();
+      assertType(fn).toStringIsEqualTo("function(new:Foo, ...?): ?");
+    }
+  }
+
+  @Test
+  public void testPrint_interfaceFunction_withoutSource() {
+    FunctionType fn = FunctionType.builder(registry).forInterface().withName("Foo").build();
+    assertType(fn).toStringIsEqualTo("function(this:Foo): ?");
+  }
+
+  @Test
+  public void testPrint_constructorFunction_withSource() {
+    try (JSTypeResolver.Closer closer = this.registry.getResolver().openForDefinition()) {
+      FunctionType fn =
+          FunctionType.builder(registry)
+              .forConstructor()
+              .withName("Foo")
+              .withSourceNode(IR.function(IR.name(""), IR.paramList(), IR.block()))
+              .build();
+      assertType(fn).toStringIsEqualTo("(typeof Foo)");
+    }
+  }
+
+  @Test
+  public void testPrint_interfaceFunction_withSource() {
+    try (JSTypeResolver.Closer closer = this.registry.getResolver().openForDefinition()) {
+      FunctionType fn =
+          FunctionType.builder(registry)
+              .forInterface()
+              .withName("Foo")
+              .withSourceNode(IR.function(IR.name(""), IR.paramList(), IR.block()))
+              .build();
+      assertType(fn).toStringIsEqualTo("(typeof Foo)");
+    }
   }
 
   @Test
@@ -435,12 +586,8 @@ public class FunctionTypeTest extends BaseJSTypeTestCase {
         ImmutableList.<TemplateType>of(), false);
     FunctionType subIface = registry.createInterfaceType("SubI", null,
         ImmutableList.<TemplateType>of(), false);
-    try {
-      subIface.setImplementedInterfaces(
-          ImmutableList.of(iface.getInstanceType()));
-      assertWithMessage("Expected exception").fail();
-    } catch (UnsupportedOperationException e) {
-      // OK
-    }
+    assertThrows(
+        Exception.class,
+        () -> subIface.setImplementedInterfaces(ImmutableList.of(iface.getInstanceType())));
   }
 }

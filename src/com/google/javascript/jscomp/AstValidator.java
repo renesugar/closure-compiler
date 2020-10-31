@@ -16,9 +16,11 @@
 
 package com.google.javascript.jscomp;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
 import com.google.javascript.rhino.InputId;
@@ -32,8 +34,6 @@ import javax.annotation.Nullable;
 
 /**
  * This class walks the AST and validates that the structure is correct.
- *
- * @author johnlenz@google.com (John Lenz)
  */
 public final class AstValidator implements CompilerPass {
 
@@ -62,15 +62,6 @@ public final class AstValidator implements CompilerPass {
     this.compiler = compiler;
     this.violationHandler = handler;
     this.isScriptFeatureValidationEnabled = validateScriptFeatures;
-  }
-
-  /**
-   * Deprecated - use the three-argument constructor instead to specify validateScriptFeatures.
-   * TODO(lharker): remove this constructor after the next external release.
-   */
-  @Deprecated
-  public AstValidator(AbstractCompiler compiler, ViolationHandler handler) {
-    this(compiler, handler, false);
   }
 
   public AstValidator(AbstractCompiler compiler) {
@@ -158,6 +149,11 @@ public final class AstValidator implements CompilerPass {
     validateStatement(n, false);
   }
 
+  /**
+   * Validates a statement node and its children.
+   *
+   * @param isAmbient whether this statement comes from TS ambient `declare [...]`
+   */
   public void validateStatement(Node n, boolean isAmbient) {
     switch (n.getToken()) {
       case LABEL:
@@ -201,20 +197,9 @@ public final class AstValidator implements CompilerPass {
         validateIf(n);
         return;
       case CONST:
-        for (Node child : n.children()) {
-          if (child.isDestructuringLhs()) {
-            // Must have two children: First child of the DESTRUCTURING_LHS node is the pattern on
-            // the LHS, second is the RHS.
-            validateChildCount(child, 2);
-          } else {
-            // Must have a child, which is the RHS (unlike VAR and LET which may have no RHS).
-            validateChildCount(child, 1);
-          }
-        }
-        // fallthrough
       case VAR:
       case LET:
-        validateNameDeclarationHelper(n.getToken(), n);
+        validateNameDeclarationHelper(n, n.getToken(), n);
         return;
       case EXPR_RESULT:
         validateExprStmt(n);
@@ -277,8 +262,8 @@ public final class AstValidator implements CompilerPass {
         validateFeature(Feature.NEW_TARGET, n);
         validateChildless(n);
         return;
-      case SUPER:
-        validateFeature(Feature.SUPER, n);
+      case IMPORT_META:
+        validateFeature(Feature.IMPORT_META, n);
         validateChildless(n);
         return;
       case FALSE:
@@ -340,6 +325,10 @@ public final class AstValidator implements CompilerPass {
         validateNumber(n);
         return;
 
+      case BIGINT:
+        validateBigInt(n);
+        return;
+
       case NAME:
         validateName(n);
         return;
@@ -349,7 +338,10 @@ public final class AstValidator implements CompilerPass {
         validateFeature(Feature.EXPONENT_OP, n);
         validateBinaryOp(n);
         return;
-      case GETELEM:
+      case COALESCE:
+        validateFeature(Feature.NULL_COALESCE_OP, n);
+        validateBinaryOp(n);
+        return;
       case COMMA:
       case OR:
       case AND:
@@ -377,8 +369,20 @@ public final class AstValidator implements CompilerPass {
         validateBinaryOp(n);
         return;
 
+      case GETELEM:
+        validateGetElem(n);
+        return;
+
+      case OPTCHAIN_GETELEM:
+        validateOptChainGetElem(n);
+        return;
+
       case GETPROP:
         validateGetProp(n);
+        return;
+
+      case OPTCHAIN_GETPROP:
+        validateOptChainGetProp(n);
         return;
 
       case ARRAYLIT:
@@ -397,8 +401,8 @@ public final class AstValidator implements CompilerPass {
         validateCall(n);
         return;
 
-      case SPREAD:
-        validateSpread(n);
+      case OPTCHAIN_CALL:
+        validateOptChainCall(n);
         return;
 
       case NEW:
@@ -434,7 +438,47 @@ public final class AstValidator implements CompilerPass {
     }
   }
 
+  /**
+   * Validate an expression or expresison-like construct.
+   *
+   * <p>An expression-like construct (pseudoexpression) is an AST fragment that is valid in some,
+   * but not all, of the same contexts as true expressions. For example, a VANILLA_FOR permits EMPTY
+   * as its condition and increment expressions, even though EMPTY is not valid as an expression in
+   * general.
+   *
+   * <p>{@code allowedPseudoexpressions} allows the caller to specify which pseudoexpressions are
+   * valid for their context. If {@code n} is a pseudoexpression, it will be considered invalid
+   * unless its token is in this set.
+   */
+  private void validatePseudoExpression(Node n, Token... allowedPseudoexpressions) {
+    switch (n.getToken()) {
+      case EMPTY:
+        validateChildless(n);
+        break;
+      case ITER_SPREAD:
+        validateChildCount(n);
+        validateFeature(Feature.SPREAD_EXPRESSIONS, n);
+        validateExpression(n.getFirstChild());
+        break;
+      default:
+        validateExpression(n);
+        return;
+    }
+
+    // This also implicitly validates that only known expression and pseudo-expression tokens are
+    // permitted.
+    ImmutableSet<Token> set = ImmutableSet.copyOf(allowedPseudoexpressions);
+    if (!set.contains(n.getToken())) {
+      violation("Expected expression or " + set + " but was " + n.getToken(), n);
+    }
+  }
+
   private void validateExpressionType(Node n) {
+    JSType type = n.getJSType();
+
+    if (type != null && !type.isResolved()) { // null types are checked in the switch statement
+      violation("Found unresolved type " + type, n);
+    }
     switch (n.getToken()) {
       case NAME:
         validateNameType(n);
@@ -447,10 +491,6 @@ public final class AstValidator implements CompilerPass {
         }
         break;
 
-      case SPREAD:
-        // we don't type spread nodes
-        break;
-
       default:
         expectSomeTypeInformation(n);
     }
@@ -461,7 +501,7 @@ public final class AstValidator implements CompilerPass {
     // from working on detached nodes.
     // Calling code should correctly determine the context and call different methods as
     // appropriate.
-    if (NodeUtil.isExpressionResultUsed(nameNode) && !NodeUtil.isGet(nameNode.getParent())) {
+    if (NodeUtil.isExpressionResultUsed(nameNode) && !NodeUtil.isNormalGet(nameNode.getParent())) {
       // If the expression result is used, it must have a type.
       // However, we don't always add a type when the name is just part of a getProp or getElem.
       // That's OK, because we'll do type checking on the getProp/Elm itself, which has a type.
@@ -474,16 +514,17 @@ public final class AstValidator implements CompilerPass {
   private void validateCallType(Node callNode) {
     // TODO(b/74537281): Shouldn't CALL nodes always have a type, even if it is unknown?
     Node callee = callNode.getFirstChild();
-    JSType calleeTypeI =
+    JSType calleeType =
         checkNotNull(callee.getJSType(), "Callee of\n\n%s\nhas no type.", callNode.toStringTree());
 
-    if (calleeTypeI.isFunctionType()) {
-      FunctionType calleeFunctionTypeI = calleeTypeI.toMaybeFunctionType();
-      JSType returnTypeI = calleeFunctionTypeI.getReturnType();
+    if (calleeType.isFunctionType()) {
+      FunctionType calleeFunctionType = calleeType.toMaybeFunctionType();
+      JSType returnType = calleeFunctionType.getReturnType();
       // Skip this check if the call node was originally in a cast, because the cast type may be
-      // narrower than the return type.
-      if (callNode.getJSTypeBeforeCast() == null) {
-        expectMatchingTypeInformation(callNode, returnTypeI);
+      // narrower than the return type. Also skip the check if the function's return type is the
+      // any (formerly unknown) type, since we may have inferred a better type.
+      if (callNode.getJSTypeBeforeCast() == null && !returnType.isUnknownType()) {
+        expectMatchingTypeInformation(callNode, returnType);
       }
     } // TODO(b/74537281): What other cases should be covered?
   }
@@ -508,7 +549,7 @@ public final class AstValidator implements CompilerPass {
     }
   }
 
-  private String getTypeAnnotationString(@Nullable JSType typeI) {
+  private static String getTypeAnnotationString(@Nullable JSType typeI) {
     if (typeI == null) {
       return "NO TYPE INFORMATION";
     } else {
@@ -523,19 +564,44 @@ public final class AstValidator implements CompilerPass {
     if (n.hasChildren()) {
       validateExpression(n.getFirstChild());
     }
+    validateYieldWithinGeneratorFunction(n);
+  }
+
+  private void validateYieldWithinGeneratorFunction(Node n) {
+    Node parentFunction = NodeUtil.getEnclosingFunction(n);
+    if (parentFunction == null || !parentFunction.isGeneratorFunction()) {
+      violation("'yield' expression is not within a generator function", n);
+    } else if (isInParameterListOfFunction(n, parentFunction)) {
+      violation("'yield' expression is not allowed in a parameter list", n);
+    }
   }
 
   private void validateAwait(Node n) {
     validateFeature(Feature.ASYNC_FUNCTIONS, n);
     validateNodeType(Token.AWAIT, n);
-    validateWithinAsyncFunction(n);
+    validateChildCount(n);
+    validateExpression(n.getFirstChild());
+    validateAwaitWithinAsyncFunction(n);
   }
 
-  private void validateWithinAsyncFunction(Node n) {
+  private void validateAwaitWithinAsyncFunction(Node n) {
     Node parentFunction = NodeUtil.getEnclosingFunction(n);
     if (parentFunction == null || !parentFunction.isAsyncFunction()) {
       violation("'await' expression is not within an async function", n);
+    } else if (isInParameterListOfFunction(n, parentFunction)) {
+      violation("'await' expression is not allowed in a parameter list", n);
     }
+  }
+
+  private boolean isInParameterListOfFunction(Node child, Node functionNode) {
+    Node paramList = checkNotNull(functionNode.getSecondChild(), functionNode);
+    for (Node parent = child.getParent(); parent != functionNode; parent = parent.getParent()) {
+      checkNotNull(parent, "{} not contained in function {}", child, functionNode);
+      if (parent == paramList) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private void validateImport(Node n) {
@@ -655,7 +721,6 @@ public final class AstValidator implements CompilerPass {
   }
 
   private void validateInterface(Node n) {
-    validateFeature(Feature.INTERFACE, n);
     validateNodeType(Token.INTERFACE, n);
     validateChildCount(n);
     Node name = n.getFirstChild();
@@ -778,6 +843,7 @@ public final class AstValidator implements CompilerPass {
       case SETTER_DEF:
         validateFeature(Feature.CLASS_GETTER_SETTER, n);
         validateObjectLiteralKeyName(n);
+        validateObjectLitKey(n);
         validateChildCount(n);
         validateMemberFunction(n, isAmbient);
         break;
@@ -982,8 +1048,61 @@ public final class AstValidator implements CompilerPass {
   private void validateCall(Node n) {
     validateNodeType(Token.CALL, n);
     validateMinimumChildCount(n, 1);
-    for (Node c = n.getFirstChild(); c != null; c = c.getNext()) {
-      validateExpression(c);
+    Node callee = n.getFirstChild();
+    if (callee.isSuper()) {
+      validateSuper(callee);
+    } else {
+      validateExpression(callee);
+    }
+    for (Node c = callee.getNext(); c != null; c = c.getNext()) {
+      validatePseudoExpression(c, Token.ITER_SPREAD);
+    }
+  }
+
+  private void validateOptChainCall(Node node) {
+    validateFeature(Feature.OPTIONAL_CHAINING, node);
+    validateNodeType(Token.OPTCHAIN_CALL, node);
+    validateMinimumChildCount(node, 1);
+    Node callee = node.getFirstChild();
+    validateExpression(callee);
+    for (Node argument = callee.getNext(); argument != null; argument = argument.getNext()) {
+      validatePseudoExpression(argument, Token.ITER_SPREAD);
+    }
+    validateFirstNodeOfOptChain(node);
+  }
+
+  @SuppressWarnings("RhinoNodeGetGrandparent")
+  private void validateSuper(Node superNode) {
+    validateFeature(Feature.SUPER, superNode);
+    validateChildless(superNode);
+    if (isTypeValidationEnabled) {
+      expectSomeTypeInformation(superNode);
+    }
+    Node superParent = superNode.getParent();
+    Node methodNode = NodeUtil.getEnclosingNonArrowFunction(superParent);
+
+    if (NodeUtil.isNormalGet(superParent) && superNode.isFirstChildOf(superParent)) {
+      // `super.prop` or `super['prop']`
+      if (methodNode == null || !NodeUtil.isMethodDeclaration(methodNode)) {
+        violation("super property references are only allowed in methods", superNode);
+      }
+    } else if (superParent.isCall() && superNode.isFirstChildOf(superParent)) {
+      // super() constructor call
+      if (methodNode == null || !NodeUtil.isEs6Constructor(methodNode)) {
+        violation("super constructor call is only allowed in a constructor method", superNode);
+      } else {
+        Node extendsNode =
+            methodNode
+                .getParent() // MEMBER_FUNCTION_DEF
+                .getParent() // CLASS_METHODS
+                .getParent() // CLASS
+                .getSecondChild(); // extends clause
+        if (extendsNode.isEmpty()) {
+          violation("super constructor call in a class that extends nothing", superNode);
+        }
+      }
+    } else {
+      violation("`super` is a syntax error here", superNode);
     }
   }
 
@@ -1008,7 +1127,14 @@ public final class AstValidator implements CompilerPass {
    * @param n
    */
   private void validateRest(Token contextType, Node n) {
-    validateNodeType(Token.REST, n);
+    switch (n.getToken()) {
+      case ITER_REST:
+      case OBJECT_REST:
+        break;
+      default:
+        violation("Unexpected node type.", n);
+        return;
+    }
     validateChildCount(n);
     validateLHS(contextType, n.getFirstChild());
     if (n.getNext() != null) {
@@ -1016,81 +1142,83 @@ public final class AstValidator implements CompilerPass {
     }
   }
 
-  private void validateSpread(Node n) {
-    validateNodeType(Token.SPREAD, n);
+  private void validateObjectSpread(Node n) {
     validateChildCount(n);
-    Node parent = n.getParent();
-    switch (parent.getToken()) {
-      case CALL:
-      case NEW:
-        if (n == parent.getFirstChild()) {
-          violation("SPREAD node is not callable.", n);
-        }
-        validateFeature(Feature.SPREAD_EXPRESSIONS, n);
-        break;
-      case OBJECTLIT:
-        validateFeature(Feature.OBJECT_LITERALS_WITH_SPREAD, n);
-        validateFeature(Feature.SPREAD_EXPRESSIONS, n);
-        break;
-      case ARRAYLIT:
-        validateFeature(Feature.SPREAD_EXPRESSIONS, n);
-        break;
-      default:
-        violation("SPREAD node should not be the child of a " + parent.getToken() + " node.", n);
-    }
+    validateFeature(Feature.OBJECT_LITERALS_WITH_SPREAD, n);
+    validateExpression(n.getFirstChild());
   }
 
   private void validateNew(Node n) {
     validateNodeType(Token.NEW, n);
     validateMinimumChildCount(n, 1);
-    for (Node c = n.getFirstChild(); c != null; c = c.getNext()) {
-      validateExpression(c);
+
+    validateExpression(n.getFirstChild());
+    for (Node c = n.getSecondChild(); c != null; c = c.getNext()) {
+      validatePseudoExpression(c, Token.ITER_SPREAD);
     }
   }
 
-  private void validateNameDeclarationHelper(Token type, Node n) {
+  /** @param statement the enclosing statement. Will not always match the declaration Token. */
+  private void validateNameDeclarationHelper(Node statement, Token declaration, Node n) {
     validateMinimumChildCount(n, 1);
     for (Node c = n.getFirstChild(); c != null; c = c.getNext()) {
-      validateNameDeclarationChild(type, c);
+      validateNameDeclarationChild(statement, declaration, c);
     }
-    if (type == Token.LET) {
+    if (declaration.equals(Token.LET)) {
       validateFeature(Feature.LET_DECLARATIONS, n);
-    } else if (type == Token.CONST) {
+    } else if (declaration.equals(Token.CONST)) {
       validateFeature(Feature.CONST_DECLARATIONS, n);
     }
   }
 
-  private void validateNameDeclarationChild(Token type, Node n) {
+  private void validateNameDeclarationChild(Node statement, Token declaration, Node n) {
+    boolean inEnhancedFor = NodeUtil.isEnhancedFor(statement);
+    boolean inForIn = statement.isForIn();
+    int minValues;
+    int maxValues;
+    if (inForIn && declaration.equals(Token.VAR)) {
+      // ECMASCRIPT5 sloppy mode allows for-in initializers.
+      minValues = 0;
+      maxValues = 1;
+    } else if (inEnhancedFor) {
+      minValues = 0;
+      maxValues = 0;
+    } else if (n.isDestructuringLhs() || declaration.equals(Token.CONST)) {
+      minValues = 1;
+      maxValues = 1;
+    } else {
+      minValues = 0;
+      maxValues = 1;
+    }
+
     if (n.isName()) {
-      // Don't use validateName here since this NAME node may have
-      // a child.
+      // Don't use validateName here since this NAME node may have a child.
       validateNonEmptyString(n);
-      validateMaximumChildCount(n, 1);
+      validateChildCountIn(n, minValues, maxValues);
+
       if (n.hasChildren()) {
         validateExpression(n.getFirstChild());
       }
     } else if (n.isDestructuringLhs()) {
-      validateDestructuringLhs(type, n);
-    } else {
-      violation("Invalid child for " + type + " node", n);
-    }
-  }
+      validateChildCountIn(n, 1 + minValues, 1 + maxValues);
 
-  private void validateDestructuringLhs(Token type, Node n) {
-    validateChildCountIn(n, 1, 2);
-    Node c = n.getFirstChild();
-    switch (c.getToken()) {
-      case ARRAY_PATTERN:
-        validateArrayPattern(type, c);
-        break;
-      case OBJECT_PATTERN:
-        validateObjectPattern(type, c);
-        break;
-      default:
-        violation("Invalid destructuring lhs first child for " + type + " node", n);
-    }
-    if (n.hasTwoChildren()) {
-      validateExpression(n.getSecondChild());
+      Node c = n.getFirstChild();
+      switch (c.getToken()) {
+        case ARRAY_PATTERN:
+          validateArrayPattern(declaration, c);
+          break;
+        case OBJECT_PATTERN:
+          validateObjectPattern(declaration, c);
+          break;
+        default:
+          violation("Invalid destructuring lhs first child for " + declaration + " node", n);
+      }
+
+      if (n.hasTwoChildren()) {
+        validateExpression(n.getSecondChild());
+      }
+    } else {
+      violation("Invalid child for " + declaration + " node", n);
     }
   }
 
@@ -1133,7 +1261,7 @@ public final class AstValidator implements CompilerPass {
         validateGetProp(n);
         break;
       case GETELEM:
-        validateBinaryOp(n);
+        validateGetElem(n);
         break;
       default:
         throw new IllegalStateException(
@@ -1149,7 +1277,7 @@ public final class AstValidator implements CompilerPass {
         case DEFAULT_VALUE:
           validateDefaultValue(type, c);
           break;
-        case REST:
+        case ITER_REST:
           validateArrayPatternRest(type, c);
           break;
         case EMPTY:
@@ -1169,7 +1297,7 @@ public final class AstValidator implements CompilerPass {
         case STRING_KEY:
           validateObjectPatternStringKey(type, c);
           break;
-        case REST:
+        case OBJECT_REST:
           validateObjectPatternRest(type, c);
           break;
         case COMPUTED_PROP:
@@ -1184,16 +1312,21 @@ public final class AstValidator implements CompilerPass {
   private void validateFor(Node n) {
     validateNodeType(Token.FOR, n);
     validateChildCount(n, 4);
-    validateVarOrOptionalExpression(n.getFirstChild());
-    validateOptionalExpression(n.getSecondChild());
-    validateOptionalExpression(n.getChildAtIndex(2));
+    Node target = n.getFirstChild();
+    if (NodeUtil.isNameDeclaration(target)) {
+      validateNameDeclarationHelper(n, target.getToken(), target);
+    } else {
+      validatePseudoExpression(target, Token.EMPTY);
+    }
+    validatePseudoExpression(n.getSecondChild(), Token.EMPTY);
+    validatePseudoExpression(n.getChildAtIndex(2), Token.EMPTY);
     validateBlock(n.getLastChild());
   }
 
   private void validateForIn(Node n) {
     validateNodeType(Token.FOR_IN, n);
     validateChildCount(n);
-    validateVarOrAssignmentTarget(n.getFirstChild());
+    validateEnhancedForVarOrAssignmentTarget(n, n.getFirstChild());
     validateExpression(n.getSecondChild());
     validateBlock(n.getLastChild());
   }
@@ -1202,34 +1335,25 @@ public final class AstValidator implements CompilerPass {
     validateFeature(Feature.FOR_OF, n);
     validateNodeType(Token.FOR_OF, n);
     validateChildCount(n);
-    validateVarOrAssignmentTarget(n.getFirstChild());
+    validateEnhancedForVarOrAssignmentTarget(n, n.getFirstChild());
     validateExpression(n.getSecondChild());
     validateBlock(n.getLastChild());
   }
 
   private void validateForAwaitOf(Node n) {
     validateFeature(Feature.FOR_AWAIT_OF, n);
-    validateFeature(Feature.ASYNC_FUNCTIONS, n);
     validateNodeType(Token.FOR_AWAIT_OF, n);
     validateChildCount(n);
-    validateVarOrAssignmentTarget(n.getFirstChild());
+    validateEnhancedForVarOrAssignmentTarget(n, n.getFirstChild());
     validateExpression(n.getSecondChild());
     validateBlock(n.getLastChild());
   }
 
-  private void validateVarOrOptionalExpression(Node n) {
+  private void validateEnhancedForVarOrAssignmentTarget(Node forNode, Node n) {
     if (NodeUtil.isNameDeclaration(n)) {
-      validateNameDeclarationHelper(n.getToken(), n);
-    } else {
-      validateOptionalExpression(n);
-    }
-  }
-
-  private void validateVarOrAssignmentTarget(Node n) {
-    if (NodeUtil.isNameDeclaration(n)) {
-      // Only one NAME can be declared for FOR-IN expressions.
+      // Only one NAME can be declared for FOR-IN and FOR_OF expressions.
       validateChildCount(n, 1);
-      validateNameDeclarationHelper(n.getToken(), n);
+      validateNameDeclarationHelper(forNode, n.getToken(), n);
     } else {
       validateLHS(n.getParent().getToken(), n);
     }
@@ -1261,7 +1385,7 @@ public final class AstValidator implements CompilerPass {
     validateChildCountIn(n, 2, 3);
     validateExpression(n.getFirstChild());
     validateBlock(n.getSecondChild());
-    if (n.getChildCount() == 3) {
+    if (n.hasXChildren(3)) {
       validateBlock(n.getLastChild());
     }
   }
@@ -1319,7 +1443,7 @@ public final class AstValidator implements CompilerPass {
     }
 
     // Validate finally
-    if (n.getChildCount() == 3) {
+    if (n.hasXChildren(3)) {
       validateBlock(n.getLastChild());
       seenCatchOrFinally = true;
     }
@@ -1358,7 +1482,7 @@ public final class AstValidator implements CompilerPass {
     validateExpression(n.getFirstChild());
     int defaults = 0;
     for (Node c = n.getSecondChild(); c != null; c = c.getNext()) {
-      validateSwitchMember(n.getLastChild());
+      validateSwitchMember(c);
       if (c.isDefaultCase()) {
         defaults++;
       }
@@ -1395,14 +1519,6 @@ public final class AstValidator implements CompilerPass {
     validateBlock(n.getLastChild());
   }
 
-  private void validateOptionalExpression(Node n) {
-    if (n.isEmpty()) {
-      validateChildless(n);
-    } else {
-      validateExpression(n);
-    }
-  }
-
   private void validateChildless(Node n) {
     validateChildCount(n, 0);
   }
@@ -1417,6 +1533,16 @@ public final class AstValidator implements CompilerPass {
     validateChildCount(n);
     Token contextType = n.getToken();
     Node lhs = n.getFirstChild();
+    validateAssignmentOpTarget(lhs, contextType);
+    validateExpression(n.getLastChild());
+  }
+
+  /**
+   * Validates the lhs of a compound assignment op, inc, or dec
+   *
+   * <p>This check is stricter than validateLhs.
+   */
+  private void validateAssignmentOpTarget(Node lhs, Token contextType) {
     switch (lhs.getToken()) {
       case NAME:
         validateName(lhs);
@@ -1425,19 +1551,57 @@ public final class AstValidator implements CompilerPass {
       case GETELEM:
         validateGetPropGetElemInLHS(contextType, lhs);
         break;
+      case CAST:
+        validateChildCount(lhs, 1);
+        validateAssignmentOpTarget(lhs.getFirstChild(), contextType);
+        break;
       default:
         violation("Invalid child for " + contextType + " node", lhs);
     }
+  }
+
+  private void validateGetElem(Node n) {
+    checkArgument(n.isGetElem(), n);
+    validateChildCount(n, 2);
+    validatePropertyReferenceTarget(n.getFirstChild());
     validateExpression(n.getLastChild());
+  }
+
+  private void validateOptChainGetElem(Node node) {
+    validateFeature(Feature.OPTIONAL_CHAINING, node);
+    checkArgument(node.isOptChainGetElem(), node);
+    validateChildCount(node, 2);
+    validateExpression(node.getFirstChild());
+    validateExpression(node.getLastChild());
+    validateFirstNodeOfOptChain(node);
   }
 
   private void validateGetProp(Node n) {
     validateNodeType(Token.GETPROP, n);
     validateChildCount(n);
-    validateExpression(n.getFirstChild());
+    validatePropertyReferenceTarget(n.getFirstChild());
     Node prop = n.getLastChild();
     validateNodeType(Token.STRING, prop);
     validateNonEmptyString(prop);
+  }
+
+  private void validateOptChainGetProp(Node node) {
+    validateFeature(Feature.OPTIONAL_CHAINING, node);
+    validateNodeType(Token.OPTCHAIN_GETPROP, node);
+    validateChildCount(node);
+    validateExpression(node.getFirstChild());
+    Node prop = node.getLastChild();
+    validateNodeType(Token.STRING, prop);
+    validateNonEmptyString(prop);
+    validateFirstNodeOfOptChain(node);
+  }
+
+  private void validatePropertyReferenceTarget(Node objectNode) {
+    if (objectNode.isSuper()) {
+      validateSuper(objectNode);
+    } else {
+      validateExpression(objectNode);
+    }
   }
 
   private void validateRegExpLit(Node n) {
@@ -1470,11 +1634,23 @@ public final class AstValidator implements CompilerPass {
     }
   }
 
+  private void validateBigInt(Node n) {
+    validateNodeType(Token.BIGINT, n);
+    validateChildCount(n);
+    try {
+      // Validate that getBigInt doesn't throw
+      n.getBigInt();
+    } catch (UnsupportedOperationException e) {
+      violation("Invalid BIGINT node.", n);
+    }
+  }
+
   private void validateArrayLit(Node n) {
     validateNodeType(Token.ARRAYLIT, n);
     for (Node c = n.getFirstChild(); c != null; c = c.getNext()) {
-      // EMPTY is allowed to represent empty slots.
-      validateOptionalExpression(c);
+      // Array-literals may have empty slots.
+      validatePseudoExpression(c, Token.EMPTY, Token.ITER_SPREAD);
+      break;
     }
   }
 
@@ -1505,8 +1681,8 @@ public final class AstValidator implements CompilerPass {
       case COMPUTED_PROP:
         validateObjectLitComputedPropKey(n);
         return;
-      case SPREAD:
-        validateSpread(n);
+      case OBJECT_SPREAD:
+        validateObjectSpread(n);
         return;
       default:
         violation("Expected object literal key expression but was " + n.getToken(), n);
@@ -1602,6 +1778,43 @@ public final class AstValidator implements CompilerPass {
     } else {
       validateChildCount(n, 2);
       validateFunctionExpression(n.getLastChild());
+      if (n.getBooleanProp(Node.COMPUTED_PROP_GETTER)) {
+        validateObjectLitComputedPropGetKey(n);
+      } else if (n.getBooleanProp(Node.COMPUTED_PROP_SETTER)) {
+        validateObjectLitComputedPropSetKey(n);
+      }
+    }
+  }
+
+  private void validateObjectLitComputedPropGetKey(Node n) {
+    validateFeature(Feature.COMPUTED_PROPERTIES, n);
+    validateNodeType(Token.COMPUTED_PROP, n);
+    validateChildCount(n);
+    Node function = n.getLastChild();
+    validateFunctionExpression(function);
+    // objlit get functions must be nameless, and must have zero parameters.
+    if (!function.getFirstChild().getString().isEmpty()) {
+      violation("Expected unnamed function expression.", n);
+    }
+    Node functionParams = function.getSecondChild();
+    if (functionParams.hasChildren()) {
+      violation("get methods must not have parameters.", n);
+    }
+  }
+
+  private void validateObjectLitComputedPropSetKey(Node n) {
+    validateFeature(Feature.COMPUTED_PROPERTIES, n);
+    validateNodeType(Token.COMPUTED_PROP, n);
+    validateChildCount(n);
+    Node function = n.getLastChild();
+    validateFunctionExpression(function);
+    // objlit set functions must be nameless, and must have 1 parameter.
+    if (!function.getFirstChild().getString().isEmpty()) {
+      violation("Expected unnamed function expression.", n);
+    }
+    Node functionParams = function.getSecondChild();
+    if (!functionParams.hasOneChild()) {
+      violation("set methods must have exactly one parameter.", n);
     }
   }
 
@@ -1620,23 +1833,7 @@ public final class AstValidator implements CompilerPass {
 
   private void validateIncDecOp(Node n) {
     validateChildCount(n, 1);
-    validateIncDecTarget(n.getFirstChild());
-  }
-
-  private void validateIncDecTarget(Node n) {
-    switch (n.getToken()) {
-      case NAME:
-      case GETPROP:
-      case GETELEM:
-        validateExpression(n);
-        break;
-      case CAST:
-        validateChildCount(n.getFirstChild(), 1);
-        validateIncDecTarget(n.getFirstChild());
-        break;
-      default:
-        violation("Invalid INC/DEC target " + n.getToken(), n);
-    }
+    validateAssignmentOpTarget(n.getFirstChild(), n.getToken());
   }
 
 
@@ -1666,13 +1863,11 @@ public final class AstValidator implements CompilerPass {
   }
 
   private void validateTypeAlias(Node n) {
-    validateFeature(Feature.TYPE_ALIAS, n);
     validateNodeType(Token.TYPE_ALIAS, n);
     validateChildCount(n);
   }
 
   private void validateAmbientDeclaration(Node n) {
-    validateFeature(Feature.AMBIENT_DECLARATION, n);
     validateNodeType(Token.DECLARE, n);
     validateAmbientDeclarationHelper(n.getFirstChild());
   }
@@ -1682,7 +1877,7 @@ public final class AstValidator implements CompilerPass {
       case VAR:
       case LET:
       case CONST:
-        validateNameDeclarationHelper(n.getToken(), n);
+        validateNameDeclarationHelper(n.getParent(), n.getToken(), n);
         break;
       case FUNCTION:
         validateFunctionSignature(n);
@@ -1708,7 +1903,6 @@ public final class AstValidator implements CompilerPass {
   }
 
   private void validateNamespace(Node n, boolean isAmbient) {
-    validateFeature(Feature.NAMESPACE_DECLARATION, n);
     validateNodeType(Token.NAMESPACE, n);
     validateChildCount(n);
     validateNamespaceName(n.getFirstChild());
@@ -1743,6 +1937,18 @@ public final class AstValidator implements CompilerPass {
     violationHandler.handleViolation(message, n);
   }
 
+  // the first node of an opt chain must be marked with Prop.START_OF_OPT_CHAIN
+  private void validateFirstNodeOfOptChain(Node n) {
+    if (!NodeUtil.isOptChainNode(n.getFirstChild())) {
+      // if the first child of an opt chain node is not an opt chain node then it is the start of an
+      // opt chain
+      if (!n.isOptionalChainStart()) {
+        violation(
+            "Start of optional chain node " + n.getToken() + " is not marked as the start.", n);
+      }
+    }
+  }
+
   private void validateNodeType(Token type, Node n) {
     if (n.getToken() != type) {
       violation("Expected " + type + " but was " + n.getToken(), n);
@@ -1764,6 +1970,10 @@ public final class AstValidator implements CompilerPass {
   }
 
   private void validateChildCountIn(Node n, int min, int max) {
+    if (max == min) {
+      validateChildCount(n, min);
+      return;
+    }
     int count = n.getChildCount();
     if (count < min || count > max) {
       violation("Expected child count in [" + min + ", " + max

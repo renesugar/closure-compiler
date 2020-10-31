@@ -17,7 +17,9 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -29,8 +31,8 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   @Override
   protected CompilerOptions getDefaultOptions() {
     CompilerOptions options = super.getDefaultOptions();
-    options.setLanguageIn(LanguageMode.ECMASCRIPT_NEXT);
     options.setLanguageOut(LanguageMode.ECMASCRIPT_NEXT);
+    options.setWarningLevel(DiagnosticGroups.TOO_MANY_TYPE_PARAMS, CheckLevel.WARNING);
     return options;
   }
 
@@ -454,6 +456,17 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testArgumentSpreadNonIterable_optChainCall() {
+    testTypesWithExtraExterns(
+        "function use(x) {}",
+        "use?.(...1);",
+        lines(
+            "Spread operator only applies to Iterable types",
+            "found   : number",
+            "required: Iterable"));
+  }
+
+  @Test
   public void testTypecheckExpressionInArgumentSpread() {
     testTypesWithExtraExterns(
         "function use(x) {}",
@@ -760,11 +773,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "var ns = {};",
             "ns.MyNumber = MyNumber;",
             "/** @type {string} */ (ns.MyNumber);",
-            ""),
-        lines(
-            "invalid cast - must be a subtype or supertype", // preserve newlines
-            "from: undefined",
-            "to  : string"));
+            ""));
   }
 
   @Test
@@ -896,11 +905,10 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "/** @const */ alias.foo = 42",
             "/** @type {alias.MyNumber} */ const x = 'str';",
             ""),
-        // TODO(sdh): should be non-nullable number, but we get nullability wrong.
         lines(
             "initializing variable", // preserve newlines
             "found   : string",
-            "required: (null|number)"));
+            "required: number"));
   }
 
   @Test
@@ -916,28 +924,24 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "  /** @const */ alias.foo = 42",
             "  /** @type {alias.MyNumber} */ const x = 'str';",
             "}"),
-        // TODO(sdh): should be non-nullable number, but we get nullability wrong.
         lines(
             "initializing variable", // preserve newlines
             "found   : string",
-            "required: (null|number)"));
+            "required: number"));
   }
 
   @Test
-  public void testTypedefOnClassSideInheritedSubtype() {
-    // Class-side inheritance should carry over any typedefs nested on the class.
+  public void testTypedefOnClassSideInheritedSubtypeInaccessible() {
+    // Class-side inheritance should not carry over any types nested on the class.
     testTypes(
         lines(
             "class Base {}",
             "/** @typedef {number} */", // preserve newlines
             "Base.MyNumber;",
             "class Sub extends Base {}",
-            "/** @type {Sub.MyNumber} */ const x = 'str';",
+            "/** @type {Sub.MyNumber} */ let x;",
             ""),
-        lines(
-            "initializing variable", // preserve newlines
-            "found   : string",
-            "required: (null|number)"));
+        "Bad type annotation. Unknown type Sub.MyNumber");
   }
 
   @Test
@@ -1030,7 +1034,6 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
 
   @Test
   public void testLocalEnumWithLet() {
-    // TODO(bradfordcsmith): Local enum types should be non-nullable just like the global ones.
     testTypes(
         lines(
             "{",
@@ -1042,16 +1045,11 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "   * @return {number}",
             "   */",
             "  function f(x) {return x}",
-            "}"),
-        lines(
-            "inconsistent return type",
-            "found   : (E<number>|null)",
-            "required: number"));
+            "}"));
   }
 
   @Test
   public void testLocalEnumWithConst() {
-    // TODO(bradfordcsmith): Local enum types should be non-nullable just like the global ones.
     testTypes(
         lines(
             "{",
@@ -1063,11 +1061,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "   * @return {number}",
             "   */",
             "  function f(x) {return x}",
-            "}"),
-        lines(
-            "inconsistent return type",
-            "found   : (E<number>|null)",
-            "required: number"));
+            "}"));
   }
 
   @Test
@@ -1480,7 +1474,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "}"),
         lines(
             "Can only iterate over a (non-null) Iterable type",
-            "found   : (Array|number)",
+            "found   : (Array<?>|number)",
             "required: Iterable"));
   }
 
@@ -2051,6 +2045,8 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "/** @dict */", //
             "class C {",
             "  ['f']() {}",
+            "  [123]() {}",
+            "  [123n]() {}",
             "}"));
   }
 
@@ -2393,6 +2389,21 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testClassErrorsReportedOnClassAndNotConstructor() {
+    testTypes(
+        lines(
+            "/** @implements {number} */",
+            "class Foo {", //
+            "  constructor() {",
+            // Make sure there's an explicit constructor.
+            "  }",
+            "}"),
+        // The actual error isn't important. What matters is that it's a class-level error and it's
+        // only reported once.
+        lines("can only implement interfaces"));
+  }
+
+  @Test
   public void testInvalidInvocationOfClassConstructor() {
     testTypes(
         lines(
@@ -2401,8 +2412,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "  }",
             "}",
             "let /** ? */ x = Foo()"),
-        lines(
-            "Constructor function(new:Foo): undefined should be called with the \"new\" keyword"));
+        lines("Constructor (typeof Foo) should be called with the \"new\" keyword"));
   }
 
   @Test
@@ -2415,8 +2425,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "  }",
             "}",
             "let /** ? */ x = Foo()"),
-        lines(
-            "Constructor function(new:Foo): undefined should be called with the \"new\" keyword"));
+        lines("Constructor (typeof Foo) should be called with the \"new\" keyword"));
   }
 
   @Test
@@ -2474,29 +2483,28 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
 
   @Test
   public void testClassTooManyTypeParameters() {
-    // TODO(sdh): This should give a warning about too many type parameters.
     testTypes(
         lines(
             "class Foo {}", //
             "var /** !Foo<number> */ x = new Foo();",
-            "var /** !Foo<string> */ y = x;"));
+            ""),
+        RhinoErrorReporter.TOO_MANY_TEMPLATE_PARAMS);
   }
 
   @Test
   public void testClassWithTemplatizedConstructorTooManyTypeParameters() {
-    // TODO(sdh): This should give a warning about too many type parameters.
     testTypes(
         lines(
             "class Foo {",
             "  /** @template T */ constructor() {}",
             "}", //
             "var /** !Foo<number> */ x = new Foo();",
-            "var /** !Foo<string> */ y = x;"));
+            ""),
+        RhinoErrorReporter.TOO_MANY_TEMPLATE_PARAMS);
   }
 
   @Test
   public void testClassWithTemplatizedClassAndConstructorTooManyTypeParameters() {
-    // TODO(sdh): This should give a warning about too many type parameters.
     testTypes(
         lines(
             "/** @template T */",
@@ -2504,7 +2512,8 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "  /** @template U */ constructor() {}",
             "}", //
             "var /** !Foo<number, number> */ x = new Foo();",
-            "var /** !Foo<number, string> */ y = x;"));
+            ""),
+        RhinoErrorReporter.TOO_MANY_TEMPLATE_PARAMS);
   }
 
   @Test
@@ -2647,13 +2656,10 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   @Test
   public void testClassPassedAsParameterClassMismatch() {
     testTypes(
-        lines(
-            "class Foo {}",
-            "function foo(/** function(new: Foo) */ arg) {}",
-            "foo(class {});"),
+        lines("class Foo {}", "function foo(/** function(new: Foo) */ arg) {}", "foo(class {});"),
         lines(
             "actual parameter 1 of foo does not match formal parameter",
-            "found   : function(new:<anonymous@[testcode]:3>): undefined",
+            "found   : (typeof <anonymous@[testcode]:3>)",
             "required: function(new:Foo): ?"));
   }
 
@@ -2668,7 +2674,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "foo(Foo);"),
         lines(
             "actual parameter 1 of foo does not match formal parameter",
-            "found   : function(new:Foo, string): undefined",
+            "found   : (typeof Foo)",
             "required: function(new:Foo, number): ?"));
   }
 
@@ -2960,6 +2966,30 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testClassImplementsInterfaceViaParent() {
+    testTypes(
+        lines(
+            "/** @interface */",
+            "class IFoo { /** @return {*} */ foo() {} }",
+            "class Foo { /** @return {number} */ foo() {} }",
+            "/** @implements {IFoo} */",
+            "class Zoo extends Foo {}"));
+  }
+
+  @Test
+  public void testClassExtendsAbstractClassesThatImplementsInterface() {
+    testTypes(
+        lines(
+            "/** @interface */",
+            "class IFoo { foo() {} }",
+            "/** @abstract @implements {IFoo} */",
+            "class Foo { /** @override */ foo() {} }",
+            "/** @abstract @implements {IFoo} */",
+            "class Bar extends Foo {}",
+            "class Zoo extends Bar {}"));
+  }
+
+  @Test
   public void testClassMissingInterfaceMethod() {
     testTypes(
         lines(
@@ -2971,15 +3001,31 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testClassCannotImplementInterfaceWithAPrototypeAssignment() {
+    testTypes(
+        lines(
+            "/** @interface */",
+            "function MyInterface() {}",
+            "/** @type {string} */",
+            "MyInterface.prototype.foo;",
+            "/** @constructor @implements {MyInterface} */",
+            "function MyClass() {}",
+            "MyClass.prototype = MyInterface.prototype;"),
+        "property foo on interface MyInterface is not implemented by type MyClass");
+  }
+
+  @Test
   public void testClassAbstractClassNeedNotExplicitlyOverrideUnimplementedInterfaceMethods() {
     testTypes(
         lines(
             "/** @interface */",
             "class Foo { foo() {} }",
             "/** @abstract @implements {Foo} */",
-            "class Bar {}"),
-        // TODO(sdh): allow this without error, provided we can get the error on the concrete class
-        "property foo on interface Foo is not implemented by type Bar");
+            "class Bar {",
+            // Also make sure that we can call the interface method that is not re-declared within
+            // the abstract class itself.
+            "    bar() { this.foo(); }",
+            "}"));
   }
 
   @Test
@@ -2993,6 +3039,41 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "  foo() {}",
             "}"),
         "property foo already defined on interface Foo; use @override to override it");
+  }
+
+  @Test
+  public void testAbstractClassMissingOverrideAnnotationForInterfaceMethod() {
+    testTypes(
+        lines(
+            "/** @interface */",
+            "class Foo { foo() {} }",
+            "/** @abstract @implements {Foo} */",
+            "class Bar {",
+            "  foo() {}",
+            "}"),
+        "property foo already defined on interface Foo; use @override to override it");
+  }
+
+  @Test
+  public void testClassMissingOverrideAnnotationForInterfaceInstanceProperty() {
+    testTypes(
+        lines(
+            "/** @record */", // `@interface` would also trigger this.
+            "class Foo {",
+            "  constructor() {",
+            "    /** @type {number} */",
+            "    this.bar;",
+            "  }",
+            "}",
+            "",
+            "/** @implements {Foo} */",
+            "class MyFoo { }",
+            // No `@override`.
+            // For some reason we only check this when assigning to prototype properties, not to
+            // instance properties.
+            "/** @type {number} */",
+            "MyFoo.prototype.bar = 0;"),
+        "property bar already defined on interface Foo; use @override to override it");
   }
 
   @Test
@@ -3016,6 +3097,47 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testClassIncompatibleInterfaceMethodImplementationInheritedOverAbstractClass() {
+    testTypes(
+        lines(
+            "/** @interface */",
+            "class Foo {",
+            "  /** @return {number} */ foo() {}",
+            "}",
+            "/** @abstract @implements {Foo} */",
+            "class Bar {}",
+            "class Zoo extends Bar {",
+            "  /** @override @return {number|string} */",
+            "  foo() {}",
+            "}"),
+        lines(
+            "mismatch of the foo property on type Zoo and the type of the property it overrides "
+                + "from interface Foo",
+            "original: function(this:Foo): number",
+            "override: function(this:Zoo): (number|string)"));
+  }
+
+  @Test
+  public void testAbstractClassIncompatibleInterfaceMethodImplementation() {
+    testTypes(
+        lines(
+            "/** @interface */",
+            "class Foo {",
+            "  /** @return {number} */ foo() {}",
+            "}",
+            "/** @abstract @implements {Foo} */",
+            "class Bar {",
+            "  /** @override @return {number|string} */",
+            "  foo() {}",
+            "}"),
+        lines(
+            "mismatch of the foo property on type Bar and the type of the property it overrides "
+                + "from interface Foo",
+            "original: function(this:Foo): number",
+            "override: function(this:Bar): (number|string)"));
+  }
+
+  @Test
   public void testClassMissingTransitiveInterfaceMethod() {
     testTypes(
         lines(
@@ -3026,6 +3148,88 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "/** @implements {Bar} */",
             "class Baz {}"),
         "property foo on interface Foo is not implemented by type Baz");
+  }
+
+  @Test
+  public void testClassMissingInterfaceInstanceProperty() {
+    testTypes(
+        lines(
+            "/** @record */", // `@interface` would also trigger this.
+            "class Foo {",
+            "  constructor() {",
+            "    /** @type {number} */",
+            "    this.bar;",
+            "  }",
+            "}",
+            "",
+            "/** @implements {Foo} */",
+            "class MyFoo { }"),
+        "property bar on interface Foo is not implemented by type MyFoo");
+  }
+
+  @Test
+  public void testClassMissingTransitiveInterfaceInstanceProperty() {
+    testTypes(
+        lines(
+            "/** @record */", // `@interface` would also trigger this.
+            "class Foo {",
+            "  constructor() {",
+            "    /** @type {number} */",
+            "    this.bar;",
+            "  }",
+            "}",
+            "",
+            "/** @record */",
+            "class SubFoo extends Foo { }",
+            "",
+            "/** @implements {SubFoo} */",
+            "class MyFoo { }"),
+        "property bar on interface Foo is not implemented by type MyFoo");
+  }
+
+  @Test
+  public void testClassInvalidOverrideOfInterfaceInstanceProperty() {
+    testTypes(
+        lines(
+            "/** @record */", // `@interface` would also trigger this.
+            "class Foo {",
+            "  constructor() {",
+            "    /** @type {number} */",
+            "    this.bar;",
+            "  }",
+            "}",
+            "",
+            "/** @implements {Foo} */",
+            "class MyFoo {",
+            "  constructor() {",
+            "    /** @type {string} */",
+            "    this.bar;",
+            "  }",
+            "}"),
+        lines(
+            "mismatch of the bar property on type MyFoo and the type "
+                + "of the property it overrides from interface Foo",
+            "original: number",
+            "override: string"));
+  }
+
+  @Test
+  public void testClassPrototypeOverrideOfInterfaceInstanceProperty() {
+    testTypes(
+        lines(
+            "/** @record */", // `@interface` would also trigger this.
+            "class Foo {",
+            "  constructor() {",
+            "    /** @type {number} */",
+            "    this.bar;",
+            "  }",
+            "}",
+            "",
+            "/** @implements {Foo} */",
+            "class MyFoo { }",
+            // It's legal to fulfill the interface using either instance or prototype properties.
+            "/** @override */",
+            "MyFoo.prototype.bar;"));
   }
 
   @Test
@@ -3072,7 +3276,6 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
 
   @Test
   public void testClassConstructorTypeParametersNotIncludedOnClass() {
-    // TODO(sdh): This should give a warning about too many type parameters.
     testTypes(
         lines(
             "/** @template T */",
@@ -3081,7 +3284,8 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "  constructor() {}",
             "}",
             "var /** !Foo<string, string> */ x = new Foo();",
-            "var /** !Foo<string, number> */ y = x;"));
+            ""),
+        RhinoErrorReporter.TOO_MANY_TEMPLATE_PARAMS);
   }
 
   @Test
@@ -3199,7 +3403,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "  static foo(/** string */ arg) {}",
             "}",
             "class Bar extends Foo {",
-            // TODO(sdh): Should need @override here.
+            "  /** @override */",
             "  static foo(arg) {",
             "    var /** null */ x = arg;",
             "  }",
@@ -3273,7 +3477,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   }
 
   @Test
-  public void testClassStaticMethodParameters() {
+  public void testStaticMethodParameters() {
     testTypes(
         lines(
             "class C {",
@@ -3304,7 +3508,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   }
 
   @Test
-  public void testClassStaticMethodReturns() {
+  public void testStaticMethodReturns() {
     testTypes(
         lines(
             "var D = class {",
@@ -3335,7 +3539,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   }
 
   @Test
-  public void testClassStaticMethodCalledOnInstance() {
+  public void testStaticMethodCalledOnInstance() {
     testTypes(
         lines(
             "class C {",
@@ -3425,22 +3629,59 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   }
 
   @Test
-  public void testClassStaticMethodOverriddenWithWidenedType() {
+  public void testStaticMethod_overriddenInBody_withSubtype_atOverride_isOk() {
     testTypes(
         lines(
             "class Base {",
             "  /** @param {string} arg */",
             "  static method(arg) {}",
             "}",
+            "",
             "class Sub extends Base {",
-            // TODO(sdh): should need @override (new warning: wait until later)
-            "  /** @param {string|number} arg */",
+            "  /**",
+            "   * @override",
+            // Method is a subtype due to parameter contravariance.
+            "   * @param {string|number} arg",
+            "   */",
             "  static method(arg) {}",
             "}"));
   }
 
   @Test
-  public void testClassStaticMethodOverriddenWithIncompatibleType() {
+  public void testStaticMethod_overriddenInBody_notAtOverride_isBad() {
+    testTypes(
+        lines(
+            "class Base {",
+            "  /** @param {string} arg */",
+            "  static method(arg) {}",
+            "}",
+            "",
+            "class Sub extends Base {",
+            // Method is a subtype due to parameter contravariance.
+            "  /** @param {string|number} arg */",
+            "  static method(arg) {}",
+            "}"),
+        lines(
+            "property method already defined on supertype (typeof Base); "
+                + "use @override to override it"));
+  }
+
+  @Test
+  public void testStaticMethod_thatIsNotAnOverride_atOverride_isBad() {
+    testTypes(
+        lines(
+            "class Base {",
+            "  /**",
+            "   * @override",
+            "   * @param {string} arg",
+            "   */",
+            "  static method(arg) {}",
+            "}"),
+        lines("property method not defined on any supertype of (typeof Base)"));
+  }
+
+  @Test
+  public void testStaticMethod_overriddenInBody_withSupertype_isBad() {
     testTypes(
         lines(
             "class Base {",
@@ -3448,19 +3689,22 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "  static method(arg) {}",
             "}",
             "class Sub extends Base {",
-            "  /** @override @param {string} arg */",
+            "  /**",
+            "   * @override",
+            // Method is a supertype due to parameter contravariance.
+            "   * @param {string} arg",
+            "   */",
             "  static method(arg) {}",
-            "}"));
-        // TODO(sdh): This should actually check the override (new warning: wait until later).
-        // lines(
-        //     "mismatch of the method property type and the type of the property it overrides "
-        //         + "from superclass Base",
-        //     "original: function((number|string)): undefined",
-        //     "override: function(string): undefined"));
+            "}"),
+        lines(
+            "mismatch of the method property type and the type of the property it overrides "
+                + "from supertype (typeof Base)",
+            "original: function(this:(typeof Base), (number|string)): undefined",
+            "override: function(this:(typeof Sub), string): undefined"));
   }
 
   @Test
-  public void testClassStaticMethodOverriddenWithIncompatibleInlineType() {
+  public void testStaticMethod_overriddenInBody_withSupertype_fromInline_isBad() {
     testTypes(
         lines(
             "class Base {",
@@ -3469,13 +3713,167 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "class Sub extends Base {",
             "  /** @override */",
             "  static method(/** string */ arg) {}",
+            "}"),
+        lines(
+            "mismatch of the method property type and the type of the property it overrides "
+                + "from supertype (typeof Base)",
+            "original: function(this:(typeof Base), (number|string)): undefined",
+            "override: function(this:(typeof Sub), string): undefined"));
+  }
+
+  @Test
+  public void testStaticMethod_overriddenOutsideBody_withSubtype_atOverride_isOk() {
+    testTypes(
+        lines(
+            "class Base {",
+            "  static method(/** string */ arg) {}",
+            "}",
+            "",
+            "class Sub extends Base { }",
+            "",
+            "/**",
+            " * @override",
+            // Method is a subtype due to parameter contravariance.
+            " * @param {string|number} arg",
+            " */",
+            "Sub.method = function(arg) {};"));
+  }
+
+  @Test
+  public void testStaticMethod_overriddenOutsideBody_withSupertype_isBad() {
+    testTypes(
+        lines(
+            "class Base {",
+            "  static method(/** string|number */ arg) {}",
+            "}",
+            "",
+            "class Sub extends Base { }",
+            "",
+            "/**",
+            " * @override",
+            " * @param {string} arg",
+            " */",
+            "Sub.method = function(arg) {};"),
+        lines(
+            "mismatch of the method property type and the type of the property it overrides "
+                + "from supertype (typeof Base)",
+            "original: function(this:(typeof Base), (number|string)): undefined",
+            "override: function(string): undefined"));
+  }
+
+  @Test
+  public void testStaticMethod_onInterface_overriddenInBody_withSubtype_atOverride_isOk() {
+    testTypes(
+        lines(
+            "/** @interface */",
+            "class Base {",
+            "  /** @param {string} arg */",
+            "  static method(arg) {}",
+            "}",
+            "",
+            "/** @interface */",
+            "class Sub extends Base {",
+            "  /**",
+            "   * @override",
+            // Method is a subtype due to parameter contravariance.
+            "   * @param {string|number} arg",
+            "   */",
+            "  static method(arg) {}",
             "}"));
-        // TODO(sdh): This should actually check the override.
-        // lines(
-        //     "mismatch of the method property type and the type of the property it overrides "
-        //         + "from superclass Base",
-        //     "original: function((number|string)): undefined",
-        //     "override: function(string): undefined"));
+  }
+
+  @Test
+  public void
+      testStaticMethod_onNamespacedType_overriddenOutsideBody_withSubtype_atOverride_isOk() {
+    testTypes(
+        lines(
+            "const ns = {};",
+            "",
+            "ns.Base = class {",
+            "  /** @param {string} arg */",
+            "  static method(arg) {}",
+            "};",
+            "",
+            "ns.Sub = class extends ns.Base {};",
+            "",
+            "/**",
+            " * @override",
+            // Method is a subtype due to parameter contravariance.
+            " * @param {string|number} arg",
+            " */",
+            // We specifically want to check that q-name lookups are checked.
+            "ns.Sub.method = function(arg) {};"));
+  }
+
+  @Test
+  public void testStaticMethod_onNamespacedType_overriddenOutsideBody_notAtOverride_isBad() {
+    testTypes(
+        lines(
+            "const ns = {};",
+            "",
+            "ns.Base = class {",
+            "  /** @param {string} arg */",
+            "  static method(arg) {}",
+            "};",
+            "",
+            "ns.Sub = class extends ns.Base {};",
+            "",
+            // Method is a subtype due to parameter contravariance.
+            "/** @param {string|number} arg */",
+            // We specifically want to check that q-name lookups are checked.
+            "ns.Sub.method = function(arg) {};"),
+        lines(
+            "property method already defined on supertype (typeof ns.Base); "
+                + "use @override to override it"));
+  }
+
+  @Test
+  public void testStaticMethod_onNamespacedType_overridden_withNonSubtype_isBad() {
+    testTypes(
+        lines(
+            "const ns = {};",
+            "",
+            "ns.Base = class {",
+            "  /** @param {string} arg */",
+            "  static method(arg) {}",
+            "};",
+            "",
+            "ns.Sub = class extends ns.Base {};",
+            "",
+            "/**",
+            " * @override",
+            // Method is a subtype due to parameter contravariance.
+            " * @param {number} arg",
+            " */",
+            // We specifically want to check that q-name lookups are checked.
+            "ns.Sub.method = function(arg) {};"),
+        lines(
+            "mismatch of the method property type and the type of the property it overrides "
+                + "from supertype (typeof ns.Base)",
+            "original: function(this:(typeof ns.Base), string): undefined",
+            "override: function(number): undefined"));
+  }
+
+  @Test
+  public void testClassExtendsForwardReference_staticMethodThatIsAnOverride_atOverride_isOk() {
+    testTypes(
+        lines(
+            "/** @return {function(new: Parent): ?} */",
+            "function mixin() {}",
+            "/** @extends {Parent} */",
+            "class Middle extends mixin() {",
+            "  /** @override */",
+            "  static method() {}",
+            "}",
+            "",
+            "class Child extends Middle {",
+            "  /** @override */",
+            "  static method() {}",
+            "}",
+            "",
+            "class Parent {",
+            "  method() {}",
+            "}"));
   }
 
   @Test
@@ -3687,6 +4085,33 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testClassSuperMethodCallableInParameters() {
+    testTypes(
+        lines(
+            "class Foo {",
+            "  /** @return {string|number} */",
+            "  foo() {",
+            "    return 0;",
+            "  }",
+            "}",
+            "class Bar extends Foo {",
+            "  /**",
+            "   * @param {number=} param",
+            "   * @return {string}",
+            "   * @override",
+            "   */",
+            //  super.foo() returns string|number, so `param` is typed as `string|number`
+            "  foo(param = super.foo()) {",
+            "    return 'param: ' + param;",
+            "  }",
+            "}"),
+        lines(
+            "default value has wrong type", //
+            "found   : (number|string)",
+            "required: (number|undefined)"));
+  }
+
+  @Test
   public void testAbstractSuperMethodCall_warning() {
     testTypes(
         lines(
@@ -3884,16 +4309,15 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   public void testClassTypeOfThisInStaticMethod() {
     testTypes(
         lines(
-            "class Foo {",
+            "class Foo {", //
             "  static foo() {",
             "    var /** null */ foo = this;",
             "  }",
-            "}"));
-        // TODO(sdh): Should be an error, but wait on it since it's a new warning.
-        // lines(
-        //     "initializing variable",
-        //     "found   : function(new:Foo): undefined",
-        //     "required: null"));
+            "}"),
+        lines(
+            "initializing variable", //
+            "found   : (typeof Foo)",
+            "required: null"));
   }
 
   @Test
@@ -4041,8 +4465,8 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "new C().x = null;"),
         new String[] {
           lines(
-              // TODO(sdh): Having different getter and setter types should be allowed and not
-              // produce the following error.
+              // TODO(b/116797078): Having different getter and setter types should be allowed and
+              // not produce the following error.
               "The types of the getter and setter for property 'x' do not match.",
               "getter type is: number",
               "setter type is: string"),
@@ -4053,7 +4477,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
           lines(
               "assignment to property x of C",
               "found   : null",
-              // TODO(sdh): This should report that it requires a string.
+              // TODO(b/116797078): This should report that it requires a string.
               "required: number")
         });
   }
@@ -4100,6 +4524,43 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "The types of the getter and setter for property 'x' do not match.",
             "getter type is: xRecord",
             "setter type is: {x: number}"));
+  }
+
+  @Test
+  public void testClassGetterWithShadowingDeclarationOnInstanceType() {
+    testTypes(
+        lines(
+            "class C {",
+            "  constructor() {",
+            "    /** @type {string|undefined} */",
+            "    this.x;",
+            "  }",
+            "  /** @return {number} */",
+            "  get x() { return 0; }",
+            "}",
+            "new C().x = null;"),
+        new String[] {
+          // TODO(b/144954613): we could really throw a clearer error here at the point where we
+          // redeclare 'this.x', and also should forbid writing to 'new C().x'.
+          lines("assignment to property x of C", "found   : null", "required: number")
+        });
+  }
+
+  @Test
+  public void testClassGetterWithDuplicateDeclarationLater() {
+    testTypes(
+        lines(
+            "class C {",
+            "  /** @return {number} */",
+            "  get x() {}",
+            "}",
+            "/** @type {string} */",
+            "C.prototype.x;",
+            "new C().x = null;"),
+        new String[] {
+          // TODO(b/144954613): this should report an error related to the redeclaration of 'x'
+          lines("assignment to property x of C", "found   : null", "required: number")
+        });
   }
 
   @Test
@@ -4298,8 +4759,8 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "}"),
         lines(
             "attempted re-definition of type Object",
-            "found   : function(new:Object): undefined",
-            "expected: function(new:Object, *=): Object"));
+            "found   : (typeof Object)",
+            "expected: (typeof Object)"));
   }
 
   @Test
@@ -4396,6 +4857,32 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "async function getAString() {",
             "  return 1;",
             "}"));
+  }
+
+  @Test
+  public void testSuperclassMixinDoesntCollideWithAnotherScope() {
+    testTypes(
+        lines(
+            "class ParentOne {}",
+            "class ParentTwo {}",
+            "function fn(x) {",
+            "  let klass;",
+            "  if (x) {",
+            "    /** @constructor @extends {ParentOne} */",
+            "    let templatizedBase = SomeVar;",
+            "    klass = class TE extends templatizedBase {};",
+            "  } else {",
+            "    /** @constructor @extends {ParentTwo} */",
+            "    let templatizedBase = OtherVar;",
+            "    klass = class TY extends templatizedBase {};",
+            "  }",
+            "}"),
+        // TODO(b/140735194): stop reporting this error, and either ban this pattern of reassigning
+        // klass outright or make it work as expected.
+        lines(
+            "mismatch in declaration of superclass type",
+            "found   : templatizedBase",
+            "required: templatizedBase"));
   }
 
   @Test
@@ -5381,8 +5868,6 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
 
   @Test
   public void testGetterOverridesInstancePropertyFromInterface() {
-    // We treat the interface fields in the constructor as different from prototype properties,
-    // so trying to override the `num` field with a getter doesn't work.
     testTypes(
         lines(
             "/** @interface */",
@@ -5397,8 +5882,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "  /** @override */",
             "  get num() { return 3; }",
             "}",
-            "var /** string */ x = (new Baz).num;"),
-        "property num not defined on any superclass of Baz");
+            "var /** string */ x = (new Baz).num;"));
   }
 
   @Test
@@ -5726,14 +6210,32 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   }
 
   @Test
-  public void testForwardDeclaredGlobalAliasOfEnumIsNonNullable() {
-    // TODO(b/116853368): this should be non-nullable and warn
+  public void testForwardDeclaredGlobalAliasOfEnumIsNonNullable_constDeclaration() {
     testTypes(
         lines(
             "/** @enum {string} */",
             "const Colors = {RED: 'red', YELLOW: 'yellow'};",
             "const /** ColorsAlias */ c = null",
-            "const ColorsAlias = Colors;"));
+            "const ColorsAlias = Colors;"),
+        lines(
+            "initializing variable", //
+            "found   : null",
+            "required: Colors<string>"));
+  }
+
+  @Test
+  public void testForwardDeclaredGlobalAliasOfEnumIsNonNullable_constJSDoc() {
+    testTypes(
+        lines(
+            "/** @enum {string} */",
+            "const Colors = {RED: 'red', YELLOW: 'yellow'};",
+            "const /** ns.ColorsAlias */ c = null",
+            "const ns = {};",
+            "/** @const */ ns.ColorsAlias = Colors;"),
+        lines(
+            "initializing variable", //
+            "found   : null",
+            "required: Colors<string>"));
   }
 
   @Test
@@ -5749,18 +6251,25 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
 
   @Test
   public void testGlobalEnumDoesNotInfluenceLocalDefaultNullablity() {
-    // TODO(b/123710194): the local Foo should be nullable and this should not warn
     testTypes(
         lines(
             "/** @enum {number} */ const Foo = {A: 1};",
             "function f() {",
             "  class Foo {};",
             "  /** @type {Foo} */ let x = null;",
-            "}"),
+            "}"));
+  }
+
+  @Test
+  public void testLocalEnumAliasDoesNotInfluenceGlobalDefaultNullablity() {
+    testTypes(
         lines(
-            "initializing variable", //
-            "found   : null",
-            "required: Foo"));
+            "class Foo {};",
+            "/** @enum {number} */ const Bar = {A: 1};",
+            "function f() {",
+            "  const Foo = Bar;",
+            "}",
+            "/** @type {Foo} */ let x = null;"));
   }
 
   @Test
@@ -5789,10 +6298,9 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "outer.inner = alias;",
             "const /** outer.inner.child.MyNumber */ x = '';"),
         lines(
-            "initializing variable",
+            "initializing variable", //
             "found   : string",
-            // TODO(sdh): this should not be nullable
-            "required: (null|number)"));
+            "required: number"));
   }
 
   @Test
@@ -5938,7 +6446,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "async function* asyncGen() { yield* gen; }"),
         lines(
             "Expression yield* expects an iterable or async iterable",
-            "found   : (AsyncGenerator<number>|Generator<string>|number)",
+            "found   : (AsyncGenerator<number,?,?>|Generator<string,?,?>|number)",
             "required: (AsyncIterator|Iterator)"));
   }
 
@@ -6232,377 +6740,29 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "let /** null */ g = asyncGen();"),
         lines(
             "initializing variable", //
-            "found   : AsyncGenerator<?>",
+            "found   : AsyncGenerator<?,?,?>",
             "required: null"));
   }
 
   @Test
-  public void testObjectSpread() {
+  public void testObjectSpread_typedAsObject() {
+    // TODO(b/128355893): Do smarter inferrence. There are a lot of potential issues with
+    // inference on object-rest, so for now we just give up and say `Object`. In theory the LHS type
+    // is correct.
     testTypes(
         lines(
-            "let /** number */ qux = 0;",
-            "let obj = {a: qux, b: 'str'};",
-            "let /** !{a: number, b: string} */ copy = {...obj};"));
-  }
-
-  @Test
-  public void testObjectSpreadBadExplicitType() {
-    testTypes(
-        lines(
-            "let /** number */ qux = 0;",
-            "let obj = {a: qux, b: 'str'};",
-            "let /** !{a: string, b: string, c: boolean} */ copy = {...obj};"),
+            "let obj = {a: 1, b: 'str'};",
+            "let /** !{a: string, b: string, c: boolean} */ copy = {c: true, ...obj, a: 'hello'};"),
         lines(
             "initializing variable",
-            "found   : {a: number, b: string}",
+            "found   : Object",
             "required: {",
             "  a: string,",
             "  b: string,",
             "  c: boolean",
             "}",
-            "missing : [c]",
-            "mismatch: [a]"));
-  }
-
-  @Test
-  public void testMultipleObjectSpread() {
-    testTypes(
-        lines(
-            "let objAB = {a: 0, b: 'b'};",
-            "let objCD = {c: 'c', d: false};",
-            "let /** !{a: number, b: string, c: string, d: boolean} */ copy = ",
-            "  {...objAB, ...objCD};"));
-  }
-
-  @Test
-  public void testMultipleObjectSpreadBadExplicitType() {
-    testTypes(
-        lines(
-            "let objAB = {a: 0, b: 'b'};",
-            "let objCD = {c: 'c', d: false};",
-            "let /** !{",
-            "  a: string,",
-            "  b: string,",
-            "  c: number,",
-            "  d: boolean,",
-            "  e: boolean,",
-            "}*/",
-            "copy = {...objAB, ...objCD};"),
-        lines(
-            "initializing variable",
-            "found   : {",
-            "  a: number,",
-            "  b: string,",
-            "  c: string,",
-            "  d: boolean",
-            "}",
-            "required: {",
-            "  a: string,",
-            "  b: string,",
-            "  c: number,",
-            "  d: boolean,",
-            "  e: boolean",
-            "}",
-            "missing : [e]",
-            "mismatch: [a,c]"));
-  }
-
-  @Test
-  public void testObjectSpreadSameKeysUnions() {
-    testTypes(
-        lines(
-            "let objAB = {a: 0, b: 'b'};",
-            "let objCD = {c: 'c', d: false, a: 'str'};",
-            "let /** !{",
-            "  a: (string|number),",
-            "  b: string,",
-            "  c: string,",
-            "  d: boolean,",
-            "}*/",
-            "copy = {...objAB, ...objCD};"));
-
-    testTypes(
-        lines(
-            "let objAB = {a: 0, b: 'b'};",
-            "let objCD = {c: 'c', d: false, a: 'str'};",
-            "let /** !{",
-            "  a: (string|number),",
-            "  b: string,",
-            "  c: string,",
-            "  d: boolean,",
-            "}*/",
-            "copy = {...objCD, ...objAB};"));
-
-    testTypes(
-        lines(
-            "let objAB = {a: 0, b: 'b'};",
-            "let objCD = {c: 'c', d: false, a: 'str'};",
-            "let /** !{",
-            "  a: (string|number|boolean),",
-            "  b: string,",
-            "  c: string,",
-            "  d: boolean,",
-            "}*/",
-            "copy = {...objAB, ...objCD, a: false};"));
-
-    testTypes(
-        lines(
-            "let objAB = {a: 0, b: 'b'};",
-            "let objCD = {c: 'c', d: false, a: 'str'};",
-            "let /** !{",
-            "  a: (string|number|boolean),",
-            "  b: string,",
-            "  c: string,",
-            "  d: boolean,",
-            "}*/",
-            "copy = {a: false, ...objAB, ...objCD};"));
-  }
-
-  @Test
-  public void testObjectSpreadWithExplicitProperties() {
-    testTypes(
-        lines(
-            "let /** number */ qux = 0;",
-            "let obj = {a: qux, b: 'str'};",
-            "let /** !{a: number, b: string, c: boolean} */ copy = {...obj, c: false};"));
-  }
-
-  @Test
-  public void testSpreadClassInstance() {
-    testTypes(
-        lines(
-            "class Qux {",
-            "  constructor() {",
-            "    /** @const {number} */",
-            "    this.a = 0;",
-            "    /** @const {string} */",
-            "    this.b = 'y';",
-            "  }",
-            "}",
-            "let q = new Qux();",
-            "let /** !{a: number, b: string} */ copy = {...q};"));
-  }
-
-  @Test
-  public void testSpreadClassInstanceBadExplicitType() {
-    testTypes(
-        lines(
-            "class Qux {",
-            "  constructor() {",
-            "    /** @const {number} */",
-            "    this.a = 0;",
-            "    /** @const {string} */",
-            "    this.b = 'y';",
-            "  }",
-            "}",
-            "let /** !{a: string, b: string, c: boolean} */ copy = {...new Qux()};"),
-        lines(
-            "initializing variable",
-            "found   : {a: number, b: string}",
-            "required: {",
-            "  a: string,",
-            "  b: string,",
-            "  c: boolean",
-            "}",
-            "missing : [c]",
-            "mismatch: [a]"));
-  }
-
-  @Test
-  public void testSpreadClassInstanceIsAnonymousType() {
-    testTypes(
-        lines(
-            "class Qux {",
-            "  constructor() {",
-            "    /** @const {number} */",
-            "    this.a = 0;",
-            "    /** @const {string} */",
-            "    this.b = 'y';",
-            "  }",
-            "}",
-            "let /** !Qux */ copy = {...new Qux()};"),
-        lines(
-            "initializing variable", //
-            "found   : {a: number, b: string}",
-            "required: Qux"));
-  }
-
-  @Test
-  public void testSpreadClassInstanceDoesNotSpreadMethods() {
-    testTypes(
-        lines(
-            "class Qux {",
-            "  constructor() {",
-            "    /** @const {number} */",
-            "    this.a = 0;",
-            "    /** @const {string} */",
-            "    this.b = 'y';",
-            "  }",
-            "",
-            "  /** @return {number} */",
-            "  baz() { return 0; }",
-            "}",
-            "let q = new Qux();",
-            "let /** !{a: number, b: string} */ copy = {...q};"));
-  }
-
-  @Test
-  public void testSpreadSubclassInstanceIncludesSupertypeProperties() {
-    testTypes(
-        lines(
-            "class Super {",
-            "  constructor() {",
-            "    /** @const {boolean} */",
-            "    this.duper = true;",
-            "  }",
-            "}",
-            "",
-            "class Qux extends Super {",
-            "  constructor() {",
-            "    super();",
-            "    /** @const {number} */",
-            "    this.a = 0;",
-            "    /** @const {string} */",
-            "    this.b = 'y';",
-            "  }",
-            "}",
-            "let q = new Qux();",
-            "let /** !{duper: boolean, a: number, b: string} */ copy = {...q};"));
-  }
-
-  @Test
-  public void testSpreadSubclassInstanceHasUnionedProperties() {
-    testTypes(
-        lines(
-            "class Super {",
-            "  constructor() {",
-            "    /** @type {number} */",
-            "    this.duper;",
-            "  }",
-            "}",
-            "",
-            "class Qux extends Super {",
-            "  constructor() {",
-            "    super();",
-            "    /** @const {string} */",
-            "    this.duper;",
-            "    /** @const {number} */",
-            "    this.a = 0;",
-            "    /** @const {string} */",
-            "    this.b = 'y';",
-            "  }",
-            "}",
-            "let q = new Qux();",
-            "let /** !{duper: (number|string), a: number, b: string} */ copy = {...q};"));
-  }
-
-  @Test
-  public void testSpreadInterface() {
-    testTypes(
-        lines(
-            "/** @interface */",
-            "class Interface {",
-            "  constructor() {",
-            "    /** @const {boolean} */",
-            "    this.i = true;",
-            "  }",
-            "}",
-            "let /** !Interface */ i;",
-            "let /** !{i: boolean} */ copy = {...i};"));
-  }
-
-  @Test
-  public void testSpreadInterfaceMismatch() {
-    testTypes(
-        lines(
-            "/** @interface */",
-            "class Interface {",
-            "  constructor() {",
-            "    /** @const {number} */",
-            "    this.i = 0;",
-            "  }",
-            "}",
-            "let /** !Interface */ i;",
-            "let /** !{i: boolean} */ copy = {...i};"),
-        lines(
-            "initializing variable",
-            "found   : {i: number}",
-            "required: {i: boolean}",
-            "missing : []",
-            "mismatch: [i]"));
-  }
-
-  @Test
-  public void testSpreadTypeDef() {
-    testTypes(
-        lines(
-            "/** @typedef {{a: number, b: string}} */",
-            "let TypeDef;",
-            "let /** !TypeDef */ t;",
-            "let /** !{a: number, b: string} */ copy = {...t};"));
-  }
-
-  @Test
-  public void testSpreadTypeDefMismatch() {
-    testTypes(
-        lines(
-            "/** @typedef {{a: string, b: number}} */",
-            "let TypeDef;",
-            "let /** !TypeDef */ t;",
-            "let /** !{a: number, b: string} */ copy = {...t};"),
-        lines(
-            "initializing variable",
-            "found   : {a: string, b: number}",
-            "required: {a: number, b: string}",
-            "missing : []",
-            "mismatch: [a,b]"));
-  }
-
-  @Test
-  public void testSpreadUnknown() {
-    testTypes(
-        lines(
-            "/** @type {?} */", //
-            "let value;",
-            "let /** !Object */ copy = {...value};"));
-
-    testTypes(
-        lines(
-            "/** @type {?} */",
-            "let value0;",
-            "let /** !{a: number, b: string} */ copy0 = {a: 0, b: '', ...value0};"));
-  }
-
-  @Test
-  public void testSpreadUnknownTypeMismatch() {
-    // Spreading unknown should have no effect on the type, rather than making the new type unknown.
-    testTypes(
-        lines(
-            "/** @type {?} */",
-            "let value;",
-            "let /** !{a: number, b: string} */ copy = {...value};"),
-        lines(
-            "initializing variable",
-            "found   : {}",
-            "required: {a: number, b: string}",
-            "missing : [a,b]",
+            "missing : [a,b,c]",
             "mismatch: []"));
-  }
-
-  @Test
-  public void testSpreadUnknownTypeMismatchExtraProperties() {
-    // Spreading unknown should have no effect on the type, rather than making the new type unknown.
-    testTypes(
-        lines(
-            "/** @type {?} */",
-            "let value;",
-            "let /** !{a: number, b: string} */ copy = {a: '', b: 0, ...value0};"),
-        lines(
-            "initializing variable",
-            "found   : {a: string, b: number}",
-            "required: {a: number, b: string}",
-            "missing : []",
-            "mismatch: [a,b]"));
   }
 
   @Test
@@ -6848,5 +7008,209 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "var /** !Foo.Bar */ x;",
             ""),
         "Bad type annotation. Unknown type Foo.Bar");
+  }
+
+  @Test
+  public void testTypeCheckingInsideGoogModule() {
+    testTypesWithExterns(
+        CLOSURE_DEFS,
+        lines(
+            "goog.module('mod.A');", //
+            "const /** number */ n = 'a string';"),
+        lines(
+            "initializing variable", //
+            "found   : string",
+            "required: number"));
+  }
+
+  @Test
+  public void testGoogModuleGet_hasTypeInferredInNestedExpression() {
+    testTypes(
+        lines(
+            CLOSURE_DEFS,
+            "function takesString(/** string */ s) {}",
+            "goog.loadModule(function(exports) {",
+            "  goog.module('a');",
+            "  exports.NUM = 0;",
+            "  return exports;",
+            "});",
+            "",
+            "(function() {", //
+            "  takesString(goog.module.get('a').NUM);",
+            "})();"),
+        lines(
+            "actual parameter 1 of takesString does not match formal parameter",
+            "found   : number",
+            "required: string"));
+  }
+
+  @Test
+  public void testJsdocCanReferToGoogModuleType_withoutNamedType() {
+    testTypes(
+        lines(
+            CLOSURE_DEFS,
+            "goog.loadModule(function(exports) {",
+            "  goog.module('a');",
+            "  exports.Foo = class {};",
+            "  return exports;",
+            "});",
+            "/** @type {!a.Foo<number>} */",
+            "let x;",
+            ""),
+        RhinoErrorReporter.TOO_MANY_TEMPLATE_PARAMS);
+  }
+
+  @Test
+  public void testJsdocCanReferToFunctionDeclarationType_withoutNamedType() {
+    testTypes(
+        lines(
+            CLOSURE_DEFS,
+            // file1
+            "goog.provide('a.Foo');",
+            "/** @constructor */",
+            "a.Foo = function() {};",
+            "",
+            // file2
+            "goog.loadModule(function(exports) {",
+            "  goog.module('b.Bar');",
+            "",
+            "  const Foo = goog.require('a.Foo');",
+            "  /** @constructor @extends {Foo} */",
+            "  function Bar() {}",
+            "  exports = Bar;",
+            "  return exports;",
+            "});",
+            "",
+            // file3
+            "/** @type {!b.Bar<number>} */",
+            "let x;",
+            ""),
+        RhinoErrorReporter.TOO_MANY_TEMPLATE_PARAMS);
+  }
+
+  @Test
+  public void testTypeCheckingEsModule_exportSpecs() {
+    testTypes("const x = 0; export {x};");
+  }
+
+  @Test
+  public void testTypeCheckingEsExportedNameDecl() {
+    testTypes(
+        "export const /** number */ x = 'not a number';",
+        lines(
+            "initializing variable", //
+            "found   : string",
+            "required: number"));
+  }
+
+  @Test
+  public void testTypeCheckingInsideEsExportDefault() {
+    testTypes(
+        "let /** number */ x; export default (x = 'not a number');",
+        lines(
+            "assignment", //
+            "found   : string",
+            "required: number"));
+  }
+
+  @Test
+  public void testTypeCheckingEsModule_importSpecs() {
+    testTypes("import {x} from './input0';");
+  }
+
+  @Test
+  public void testTypeCheckingEsModule_importStar() {
+    testTypes("import * as mod from './input0';");
+  }
+
+  @Test
+  public void testExplicitUnrestrictedOverridesSuperImplicitStruct() {
+    disableStrictMissingPropertyChecks();
+    testTypes(
+        lines(
+            "class A {}",
+            "/** @unrestricted */",
+            "class B extends A {",
+            "  foo() { this.x; this.x = 0; this[0]; this[0] = 0; }",
+            "}"));
+  }
+
+  @Test
+  public void testImplicitStructOverridesSuperExplicitUnrestricted() {
+    disableStrictMissingPropertyChecks();
+    testTypes(
+        lines(
+            "/** @unrestricted */",
+            "class A {}",
+            "class B extends A {",
+            "  foo() { this.x; this.x = 0; this[0]; this[0] = 0;}",
+            "}"),
+        ImmutableList.of(
+            "Property x never defined on B",
+            "Cannot add a property to a struct instance after it is constructed. (If you already"
+                + " declared the property, make sure to give it a type.)",
+            "Cannot do '[]' access on a struct",
+            "Cannot do '[]' access on a struct"));
+  }
+
+  @Test
+  public void testExplicitUnrestrictedOverridesSuperExplicitStruct() {
+    disableStrictMissingPropertyChecks();
+    testTypes(
+        lines(
+            "/** @constructor @struct */",
+            "function A() {}",
+            "/** @unrestricted */",
+            "class B extends A {",
+            "  foo() { this.x; this.x = 0; this[0]; this[0] = 0;}",
+            "}"));
+  }
+
+  @Test
+  public void testImplicitUnrestrictedDoesNotOverridesSuperExplicitStruct() {
+    disableStrictMissingPropertyChecks();
+    testTypes(
+        lines(
+            "/** @constructor @struct */",
+            "function A() {}",
+            "/** @constructor @extends {A} */",
+            "function B() {}",
+            "B.prototype.foo = function() { this.x; this.x = 0; this[0]; this[0] = 0;};"),
+        ImmutableList.of(
+            "Property x never defined on B",
+            "Cannot add a property to a struct instance after it is constructed. (If you already"
+                + " declared the property, make sure to give it a type.)",
+            "Cannot do '[]' access on a struct",
+            "Cannot do '[]' access on a struct"));
+  }
+
+  @Test
+  public void testUnion_forwardEnumRefAndNumber() {
+    testTypes(
+        lines(
+            "/** @enum {Type} */",
+            "const Enum = {A: 'a'};",
+            "/** @typedef {string} */ let Type;",
+            "const /** !Enum|number */ n = null;"),
+        lines(
+            "initializing variable",
+            "found   : null",
+            "required: (Enum<string>|number)" // Verify this doesn't drop Enum<string>
+            ));
+  }
+
+  @Test
+  public void testUnion_numberAndForwardEnumRef() {
+    testTypes(
+        lines(
+            "/** @enum {Type} */",
+            "const Enum = {A: 'a'};",
+            "/** @typedef {string} */ let Type;",
+            "const /** number|!Enum */ n = null;"),
+        lines(
+            "initializing variable",
+            "found   : null",
+            "required: (Enum<string>|number)" // Verify this doesn't drop Enum<string>
+            ));
   }
 }

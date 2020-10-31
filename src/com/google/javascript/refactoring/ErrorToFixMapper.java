@@ -15,24 +15,24 @@
  */
 package com.google.javascript.refactoring;
 
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.javascript.refactoring.SuggestedFix.getShortNameForRequire;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
 import com.google.javascript.jscomp.AbstractCompiler;
 import com.google.javascript.jscomp.JSError;
 import com.google.javascript.jscomp.NodeTraversal;
 import com.google.javascript.jscomp.NodeUtil;
-import com.google.javascript.jscomp.lint.CheckRequiresAndProvidesSorted;
+import com.google.javascript.jscomp.lint.CheckProvidesSorted;
+import com.google.javascript.jscomp.lint.CheckRequiresSorted;
+import com.google.javascript.refactoring.SuggestedFix.ImportType;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -43,80 +43,94 @@ import java.util.regex.Pattern;
  *     make it easier for people adding new warnings to also add fixes for them.
  */
 public final class ErrorToFixMapper {
-  private ErrorToFixMapper() {} // All static
+
 
   private static final Pattern DID_YOU_MEAN = Pattern.compile(".*Did you mean (.*)\\?");
   private static final Pattern EARLY_REF =
       Pattern.compile("Variable referenced before declaration: (.*)");
   private static final Pattern MISSING_REQUIRE =
-      Pattern.compile("missing require: '([^']+)'");
+      Pattern.compile("'([^']+)' references a .*", Pattern.DOTALL);
   private static final Pattern FULLY_QUALIFIED_NAME =
       Pattern.compile("Reference to fully qualified import name '([^']+)'.*");
   private static final Pattern USE_SHORT_NAME =
       Pattern.compile(".*Please use the short name '(.*)' instead.");
 
-  public static ImmutableList<SuggestedFix> getFixesForJsError(
-      JSError error, AbstractCompiler compiler) {
-    SuggestedFix fix = getFixForJsError(error, compiler);
+  private final AbstractCompiler compiler;
+  private final LinkedHashMap<Node, ScriptMetadata> metadataForEachScript = new LinkedHashMap<>();
+
+  public ErrorToFixMapper(AbstractCompiler compiler) {
+    this.compiler = compiler;
+  }
+
+  public ImmutableList<SuggestedFix> getFixesForJsError(JSError error) {
+    SuggestedFix fix = getFixForJsError(error);
     if (fix != null) {
       return ImmutableList.of(fix);
     }
     switch (error.getType().key) {
+      case "JSC_IMPLICITLY_NONNULL_JSDOC":
       case "JSC_IMPLICITLY_NULLABLE_JSDOC":
       case "JSC_MISSING_NULLABILITY_MODIFIER_JSDOC":
       case "JSC_NULL_MISSING_NULLABILITY_MODIFIER_JSDOC":
-        return getFixesForImplicitNullabilityErrors(error, compiler);
+        return getFixesForImplicitNullabilityErrors(error);
       default:
         return ImmutableList.of();
     }
   }
 
   /**
-   * Creates a SuggestedFix for the given error. Note that some errors have multiple fixes
-   * so getFixesForJsError should often be used instead of this.
+   * Creates a SuggestedFix for the given error. Note that some errors have multiple fixes so
+   * getFixesForJsError should often be used instead of this.
    */
-  public static SuggestedFix getFixForJsError(JSError error, AbstractCompiler compiler) {
+  public SuggestedFix getFixForJsError(JSError error) {
     switch (error.getType().key) {
       case "JSC_REDECLARED_VARIABLE":
-        return getFixForRedeclaration(error, compiler);
+        return getFixForRedeclaration(error);
       case "JSC_REFERENCE_BEFORE_DECLARE":
-        return getFixForEarlyReference(error, compiler);
+        return getFixForEarlyReference(error);
       case "JSC_MISSING_SEMICOLON":
-        return getFixForMissingSemicolon(error, compiler);
+        return getFixForMissingSemicolon(error);
       case "JSC_REQUIRES_NOT_SORTED":
-        return getFixForUnsortedRequiresOrProvides(
-            error, compiler, "goog.require", "goog.requireType", "goog.forwardDeclare");
+        return getFixForUnsortedRequires(error);
       case "JSC_PROVIDES_NOT_SORTED":
-        return getFixForUnsortedRequiresOrProvides(error, compiler, "goog.provide");
+        return getFixForUnsortedProvides(error);
       case "JSC_DEBUGGER_STATEMENT_PRESENT":
-        return removeNode(error, compiler);
+        return new SuggestedFix.Builder()
+            .attachMatchedNodeInfo(error.getNode(), compiler)
+            .setDescription("Remove debugger statement")
+            .delete(error.getNode())
+            .build();
       case "JSC_USELESS_EMPTY_STATEMENT":
-        return removeEmptyStatement(error, compiler);
-      case "JSC_INEXISTENT_PROPERTY":
-        return getFixForInexistentProperty(error, compiler);
+        return removeEmptyStatement(error);
+      case "JSC_INEXISTENT_PROPERTY_WITH_SUGGESTION":
+      case "JSC_STRICT_INEXISTENT_PROPERTY_WITH_SUGGESTION":
+        return getFixForInexistentProperty(error);
       case "JSC_MISSING_CALL_TO_SUPER":
-        return getFixForMissingSuper(error, compiler);
+        return getFixForMissingSuper(error);
       case "JSC_INVALID_SUPER_CALL_WITH_SUGGESTION":
-        return getFixForInvalidSuper(error, compiler);
-      case "JSC_MISSING_REQUIRE_WARNING":
-      case "JSC_MISSING_REQUIRE_STRICT_WARNING":
-        return getFixForMissingRequire(error, compiler);
+        return getFixForInvalidSuper(error);
+      case "JSC_MISSING_REQUIRE":
+      case "JSC_MISSING_REQUIRE_IN_PROVIDES_FILE":
+        return getFixForMissingRequire(error, ImportType.REQUIRE);
+      case "JSC_MISSING_REQUIRE_TYPE":
+      case "JSC_MISSING_REQUIRE_TYPE_IN_PROVIDES_FILE":
+        return getFixForMissingRequire(error, ImportType.REQUIRE_TYPE);
       case "JSC_EXTRA_REQUIRE_WARNING":
-        return getFixForExtraRequire(error, compiler);
+        return getFixForExtraRequire(error);
       case "JSC_REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME":
-      case "JSC_JSDOC_REFERENCE_TO_SHORT_IMPORT_BY_LONG_NAME_INCLUDING_SHORT_NAME":
       case "JSC_REFERENCE_TO_FULLY_QUALIFIED_IMPORT_NAME":
-        // TODO(tbreisacher): Apply this fix for JSC_JSDOC_REFERENCE_TO_FULLY_QUALIFIED_IMPORT_NAME.
-        return getFixForReferenceToShortImportByLongName(error, compiler);
+        return getFixForReferenceToShortImportByLongName(error);
       case "JSC_REDUNDANT_NULLABILITY_MODIFIER_JSDOC":
-        return getFixForRedundantNullabilityModifierJsDoc(error, compiler);
+        return getFixForRedundantNullabilityModifierJsDoc(error);
+      case "JSC_MISSING_CONST_ON_CONSTANT_CASE":
+        return getFixForConstantCaseErrors(error);
       default:
         return null;
     }
   }
 
-  private static SuggestedFix getFixForRedeclaration(JSError error, AbstractCompiler compiler) {
-    Node name = error.node;
+  private SuggestedFix getFixForRedeclaration(JSError error) {
+    Node name = error.getNode();
     checkState(name.isName(), name);
     Node parent = name.getParent();
     if (!NodeUtil.isNameDeclaration(parent)) {
@@ -126,9 +140,11 @@ public final class ErrorToFixMapper {
     SuggestedFix.Builder fix = new SuggestedFix.Builder().attachMatchedNodeInfo(name, compiler);
 
     if (!name.hasChildren()) {
-      Node nodeToDelete = parent.hasOneChild() ? parent : error.node;
-      return fix.delete(nodeToDelete).build();
+      Node nodeToDelete = parent.hasOneChild() ? parent : error.getNode();
+      return fix.setDescription("Remove redundant declaration").delete(nodeToDelete).build();
     }
+
+    fix.setDescription("Convert redundant declaration to assignment");
 
     Node assign = IR.exprResult(
         IR.assign(name.cloneNode(), name.getFirstChild().cloneTree()));
@@ -184,59 +200,71 @@ public final class ErrorToFixMapper {
    * (JSC_REDECLARED_VARIABLE). But after running the fixer once, you can then run it again and
    * #getFixForRedeclaration will take care of the JSC_REDECLARED_VARIABLE warning.
    */
-  private static SuggestedFix getFixForEarlyReference(JSError error, AbstractCompiler compiler) {
-    Matcher m = EARLY_REF.matcher(error.description);
+  private SuggestedFix getFixForEarlyReference(JSError error) {
+    Matcher m = EARLY_REF.matcher(error.getDescription());
     if (m.matches()) {
       String name = m.group(1);
-      Node stmt = NodeUtil.getEnclosingStatement(error.node);
+      Node stmt = NodeUtil.getEnclosingStatement(error.getNode());
       return new SuggestedFix.Builder()
-          .attachMatchedNodeInfo(error.node, compiler)
+          .attachMatchedNodeInfo(error.getNode(), compiler)
+          .setDescription("Insert var declaration statement")
           .insertBefore(stmt, "var " + name + ";\n")
           .build();
     }
     return null;
   }
 
-  private static SuggestedFix getFixForReferenceToShortImportByLongName(
-      JSError error, AbstractCompiler compiler) {
+  private SuggestedFix getFixForReferenceToShortImportByLongName(JSError error) {
     SuggestedFix.Builder fix =
-        new SuggestedFix.Builder().attachMatchedNodeInfo(error.node, compiler);
+        new SuggestedFix.Builder().attachMatchedNodeInfo(error.getNode(), compiler);
     NodeMetadata metadata = new NodeMetadata(compiler);
-    Match match = new Match(error.node, metadata);
+    Match match = new Match(error.getNode(), metadata);
 
-    Matcher fullNameMatcher = FULLY_QUALIFIED_NAME.matcher(error.description);
-    checkState(fullNameMatcher.matches(), error.description);
+    Node script = compiler.getScriptNode(error.getSourceName());
+    ScriptMetadata scriptMetadata = this.getMetadataForScript(script);
+
+    Matcher fullNameMatcher = FULLY_QUALIFIED_NAME.matcher(error.getDescription());
+    checkState(fullNameMatcher.matches(), error.getDescription());
     String fullName = fullNameMatcher.group(1);
 
-    Matcher shortNameMatcher = USE_SHORT_NAME.matcher(error.description);
+    Matcher shortNameMatcher = USE_SHORT_NAME.matcher(error.getDescription());
     String shortName;
     if (shortNameMatcher.matches()) {
       shortName = shortNameMatcher.group(1);
     } else {
-      shortName = fullName.substring(fullName.lastIndexOf('.') + 1);
-      fix.addLhsToGoogRequire(match, fullName);
+      fix.addGoogRequire(match, fullName, scriptMetadata);
+      shortName = scriptMetadata.getAlias(fullName);
     }
 
     String oldName =
-        error.node.isQualifiedName() ? error.node.getQualifiedName() : error.node.getString();
+        error.getNode().isQualifiedName()
+            ? error.getNode().getQualifiedName()
+            : error.getNode().getString();
 
     return fix.replace(
-            error.node, NodeUtil.newQName(compiler, oldName.replace(fullName, shortName)), compiler)
+            error.getNode(),
+            NodeUtil.newQName(compiler, oldName.replace(fullName, shortName)),
+            compiler)
         .build();
   }
 
-  private static ImmutableList<SuggestedFix> getFixesForImplicitNullabilityErrors(
-      JSError error, AbstractCompiler compiler) {
+  private ImmutableList<SuggestedFix> getFixesForImplicitNullabilityErrors(JSError error) {
+
+    if (error.getNode().getSourceFileName() == null) {
+      // If we don't have a source location we can't generate a valid fix.
+      return ImmutableList.of();
+    }
+
     SuggestedFix qmark =
         new SuggestedFix.Builder()
-            .attachMatchedNodeInfo(error.node, compiler)
-            .insertBefore(error.node, "?")
+            .attachMatchedNodeInfo(error.getNode(), compiler)
+            .insertBefore(error.getNode(), "?")
             .setDescription("Make nullability explicit")
             .build();
     SuggestedFix bang =
         new SuggestedFix.Builder()
-            .attachMatchedNodeInfo(error.node, compiler)
-            .insertBefore(error.node, "!")
+            .attachMatchedNodeInfo(error.getNode(), compiler)
+            .insertBefore(error.getNode(), "!")
             .setDescription("Make type non-nullable")
             .build();
     switch (error.getType().key) {
@@ -249,192 +277,199 @@ public final class ErrorToFixMapper {
       case "JSC_IMPLICITLY_NULLABLE_JSDOC":
         // The type-based check prefers ? over ! since it only warns for names that are nullable.
         return ImmutableList.of(qmark, bang);
+      case "JSC_IMPLICITLY_NONNULL_JSDOC":
+        // Using type-information, we can also be confident about ! for enums and typedefs.
+        return ImmutableList.of(bang);
       default:
         throw new IllegalArgumentException("Unexpected JSError Type: " + error.getType().key);
     }
   }
 
-  private static SuggestedFix removeNode(JSError error, AbstractCompiler compiler) {
+  private SuggestedFix removeEmptyStatement(JSError error) {
     return new SuggestedFix.Builder()
-        .attachMatchedNodeInfo(error.node, compiler)
-        .delete(error.node)
+        .attachMatchedNodeInfo(error.getNode(), compiler)
+        .setDescription("Remove empty statement")
+        .deleteWithoutRemovingWhitespace(error.getNode())
         .build();
   }
 
-  private static SuggestedFix removeEmptyStatement(JSError error, AbstractCompiler compiler) {
+  private SuggestedFix getFixForMissingSemicolon(JSError error) {
     return new SuggestedFix.Builder()
-        .attachMatchedNodeInfo(error.node, compiler)
-        .deleteWithoutRemovingWhitespace(error.node)
+        .attachMatchedNodeInfo(error.getNode(), compiler)
+        .insertAfter(error.getNode(), ";")
         .build();
   }
 
-  private static SuggestedFix getFixForMissingSemicolon(JSError error, AbstractCompiler compiler) {
+  private SuggestedFix getFixForMissingSuper(JSError error) {
+    Node constructorFunction = error.getNode().getFirstChild();
+    Node body = NodeUtil.getFunctionBody(constructorFunction);
     return new SuggestedFix.Builder()
-        .attachMatchedNodeInfo(error.node, compiler)
-        .insertAfter(error.node, ";")
-        .build();
-  }
-
-  private static SuggestedFix getFixForMissingSuper(JSError error, AbstractCompiler compiler) {
-    Node body = NodeUtil.getFunctionBody(error.node);
-    return new SuggestedFix.Builder()
-        .attachMatchedNodeInfo(error.node, compiler)
+        .attachMatchedNodeInfo(error.getNode(), compiler)
         .addChildToFront(body, "super();")
         .build();
   }
 
-  private static SuggestedFix getFixForInvalidSuper(JSError error, AbstractCompiler compiler) {
-    Matcher m = DID_YOU_MEAN.matcher(error.description);
+  private SuggestedFix getFixForInvalidSuper(JSError error) {
+    Matcher m = DID_YOU_MEAN.matcher(error.getDescription());
     if (m.matches()) {
+      String superDotSuggestion = checkNotNull(m.group(1));
       return new SuggestedFix.Builder()
-          .attachMatchedNodeInfo(error.node, compiler)
-          .replace(error.node, NodeUtil.newQName(compiler, m.group(1)), compiler)
+          .attachMatchedNodeInfo(error.getNode(), compiler)
+          .setDescription("Call '" + superDotSuggestion + "' instead")
+          .replace(error.getNode(), NodeUtil.newQName(compiler, superDotSuggestion), compiler)
           .build();
     }
     return null;
   }
 
-  private static SuggestedFix getFixForInexistentProperty(
-      JSError error, AbstractCompiler compiler) {
-    Matcher m = DID_YOU_MEAN.matcher(error.description);
+  private SuggestedFix getFixForInexistentProperty(JSError error) {
+    Matcher m = DID_YOU_MEAN.matcher(error.getDescription());
     if (m.matches()) {
       String suggestedPropName = m.group(1);
       return new SuggestedFix.Builder()
-          .attachMatchedNodeInfo(error.node, compiler)
-          .rename(error.node, suggestedPropName)
+          .attachMatchedNodeInfo(error.getNode(), compiler)
+          .setDescription("Change property name to '" + suggestedPropName + "'")
+          .rename(error.getNode(), suggestedPropName)
           .build();
     }
     return null;
   }
 
-  private static SuggestedFix getFixForMissingRequire(JSError error, AbstractCompiler compiler) {
-    Matcher regexMatcher = MISSING_REQUIRE.matcher(error.description);
-    checkState(regexMatcher.matches(),
-        "Unexpected error description: %s", error.description);
+  private SuggestedFix getFixForMissingRequire(JSError error, ImportType importType) {
+    Matcher regexMatcher = MISSING_REQUIRE.matcher(error.getDescription());
+    checkState(regexMatcher.matches(), "Unexpected error description: %s", error.getDescription());
     String namespaceToRequire = regexMatcher.group(1);
-    NodeMetadata metadata = new NodeMetadata(compiler);
-    Match match = new Match(error.node, metadata);
-    SuggestedFix.Builder fix = new SuggestedFix.Builder()
-        .attachMatchedNodeInfo(error.node, compiler)
-        .addGoogRequire(match, namespaceToRequire);
-    if (NodeUtil.getEnclosingType(error.node, Token.MODULE_BODY) != null) {
-      Node nodeToReplace = null;
-      if (error.node.isNew()) {
-        nodeToReplace = error.node.getFirstChild();
-      } else if (error.node.isCall()) {
-        nodeToReplace = error.node.getFirstFirstChild();
-      } else if (error.node.isQualifiedName()) {
-        nodeToReplace = error.node;
-      }
 
-      if (nodeToReplace != null && nodeToReplace.matchesQualifiedName(namespaceToRequire)) {
-        String shortName = getShortNameForRequire(namespaceToRequire);
-        fix.replace(nodeToReplace, IR.name(shortName), compiler);
-      }
+    String qName =
+        error.getNode().isQualifiedName()
+            ? error.getNode().getQualifiedName()
+            : error.getNode().getString();
+
+    checkState(
+        qName.startsWith(namespaceToRequire),
+        "Expected error location %s to start with namespace <%s>",
+        error.getNode(),
+        namespaceToRequire);
+
+    Node script = compiler.getScriptNode(error.getSourceName());
+    ScriptMetadata scriptMetadata = this.getMetadataForScript(script);
+
+    NodeMetadata metadata = new NodeMetadata(compiler);
+    Match match = new Match(error.getNode(), metadata);
+    SuggestedFix.Builder fix =
+        new SuggestedFix.Builder()
+            .attachMatchedNodeInfo(error.getNode(), compiler)
+            .addImport(match, namespaceToRequire, importType, scriptMetadata);
+
+    String alias = scriptMetadata.getAlias(namespaceToRequire);
+    if (alias != null) {
+      fix.replace(
+          error.getNode(),
+          NodeUtil.newQName(compiler, qName.replace(namespaceToRequire, alias)),
+          compiler);
     }
+
     return fix.build();
   }
 
-  private static SuggestedFix getFixForExtraRequire(JSError error, AbstractCompiler compiler) {
-    SuggestedFix.Builder fix =
-        new SuggestedFix.Builder().attachMatchedNodeInfo(error.node, compiler);
-    boolean destructuring = NodeUtil.getEnclosingType(error.node, Token.OBJECT_PATTERN) != null;
+  private SuggestedFix getFixForExtraRequire(JSError error) {
+    Node node = error.getNode();
+
+    SuggestedFix.Builder fix = new SuggestedFix.Builder().attachMatchedNodeInfo(node, compiler);
+    boolean destructuring = NodeUtil.getEnclosingType(node, Token.OBJECT_PATTERN) != null;
     if (destructuring) {
-      if (error.node.isStringKey()) {
-        fix.delete(error.node);
+      fix.setDescription("Delete unused symbol");
+      if (node.isStringKey()) {
+        fix.delete(node);
       } else {
-        checkState(error.node.getParent().isStringKey(), error.node.getParent());
-        fix.delete(error.node.getParent());
+        checkState(node.getParent().isStringKey(), node.getParent());
+        fix.delete(node.getParent());
       }
     } else {
-      fix.deleteWithoutRemovingWhitespaceBefore(NodeUtil.getEnclosingStatement(error.node));
+      fix.setDescription("Delete extra require");
+      fix.deleteWithoutRemovingWhitespaceBefore(NodeUtil.getEnclosingStatement(node));
     }
     return fix.build();
   }
 
-  private static SuggestedFix getFixForUnsortedRequiresOrProvides(
-      JSError error, AbstractCompiler compiler, String... closureFunctions) {
-    SuggestedFix.Builder fix = new SuggestedFix.Builder();
-    fix.attachMatchedNodeInfo(error.node, compiler);
-    Node script = NodeUtil.getEnclosingScript(error.node);
-    RequireProvideSorter cb = new RequireProvideSorter(closureFunctions);
-    NodeTraversal.traverse(compiler, script, cb);
-    Node first = cb.calls.get(0);
-    Node last = Iterables.getLast(cb.calls);
+  private SuggestedFix getFixForUnsortedRequires(JSError error) {
+    // TODO(tjgq): Encode enough information in the error to avoid the need to run a traversal in
+    // order to produce the fix.
+    Node script = NodeUtil.getEnclosingScript(error.getNode());
+    CheckRequiresSorted callback = new CheckRequiresSorted(CheckRequiresSorted.Mode.COLLECT_ONLY);
+    NodeTraversal.traverse(compiler, script, callback);
 
-    cb.sortCallsAlphabetically();
-    StringBuilder sb = new StringBuilder();
-    for (Node n : cb.calls) {
-      String statement = fix.generateCode(compiler, n);
-      JSDocInfo jsDoc = NodeUtil.getBestJSDocInfo(n);
-      if (jsDoc != null) {
-        statement = jsDoc.getOriginalCommentString() + "\n" + statement;
-      }
-      sb.append(statement);
+    if (!callback.needsFix()) {
+      return null;
     }
-    // Trim to remove the newline after the last goog.require/provide.
-    String newContent = sb.toString().trim();
-    return fix.replaceRange(first, last, newContent).build();
-  }
 
-  private static SuggestedFix getFixForRedundantNullabilityModifierJsDoc(
-      JSError error, AbstractCompiler compiler) {
     return new SuggestedFix.Builder()
-        .attachMatchedNodeInfo(error.node, compiler)
-        .replaceText(error.node, 1, "")
+        .attachMatchedNodeInfo(callback.getFirstNode(), compiler)
+        .replaceRange(callback.getFirstNode(), callback.getLastNode(), callback.getReplacement())
         .build();
   }
 
-  private static class RequireProvideSorter implements NodeTraversal.Callback, Comparator<Node> {
-    private final ImmutableSet<String> closureFunctions;
-    private final List<Node> calls = new ArrayList<>();
-    private boolean finished = false;
+  private SuggestedFix getFixForUnsortedProvides(JSError error) {
+    // TODO(tjgq): Encode enough information in the error to avoid the need to run a traversal in
+    // order to produce the fix.
+    Node script = NodeUtil.getEnclosingScript(error.getNode());
+    CheckProvidesSorted callback = new CheckProvidesSorted(CheckProvidesSorted.Mode.COLLECT_ONLY);
+    NodeTraversal.traverse(compiler, script, callback);
 
-    RequireProvideSorter(String... closureFunctions) {
-      this.closureFunctions = ImmutableSet.copyOf(closureFunctions);
+    if (!callback.needsFix()) {
+      return null;
     }
 
-    @Override
-    public final boolean shouldTraverse(NodeTraversal nodeTraversal, Node n, Node parent) {
-      return !finished;
+    return new SuggestedFix.Builder()
+        .attachMatchedNodeInfo(callback.getFirstNode(), compiler)
+        .replaceRange(callback.getFirstNode(), callback.getLastNode(), callback.getReplacement())
+        .build();
+  }
+
+  private SuggestedFix getFixForRedundantNullabilityModifierJsDoc(JSError error) {
+    return new SuggestedFix.Builder()
+        .attachMatchedNodeInfo(error.getNode(), compiler)
+        .replaceText(error.getNode(), 1, "")
+        .build();
+  }
+  /**
+   * Suggests a fix for a constant case error.
+   *
+   * <p>If the variable is in a let clause, suggest adding a const. If the variable is not, suggest
+   * adding a @const annotation. Don't try to adjust the JSDoc, because that can produce invalid
+   * output.
+   */
+  private SuggestedFix getFixForConstantCaseErrors(JSError error) {
+    Node n = error.getNode();
+    Node parent = n.getParent();
+    if (!n.isName() || !NodeUtil.isNameDeclaration(parent)) {
+      return null;
     }
 
-    @Override
-    public final void visit(NodeTraversal nodeTraversal, Node n, Node parent) {
-      if (n.isCall()
-          && parent.isExprResult()
-          && matchName(n.getFirstChild())) {
-        calls.add(parent);
-      } else if (NodeUtil.isNameDeclaration(parent)
-          && n.hasChildren()
-          && n.getLastChild().isCall()
-          && matchName(n.getLastChild().getFirstChild())) {
-        checkState(n.isName() || n.isDestructuringLhs(), n);
-        calls.add(parent);
-      } else if (!calls.isEmpty() && parent != null && NodeUtil.isStatement(parent)) {
-        // Reached a non-goog.(require|provide|forwardDeclare) statement, so stop.
-        finished = true;
-      }
+    if (parent.isLet()) {
+      // Convert to a `const` declaration
+      return new SuggestedFix.Builder()
+          .setDescription("Make explicitly constant")
+          .attachMatchedNodeInfo(parent, compiler)
+          .replaceText(parent, 3, "const")
+          .build();
     }
+    // Don't convert a `var` to a `const` to avoid breaking variable scoping.
+    checkState(parent.isVar(), parent);
+    JSDocInfo info = parent.getJSDocInfo();
+    if (info == null) {
+      return new SuggestedFix.Builder()
+          .setDescription("Make explicitly constant")
+          .attachMatchedNodeInfo(parent, compiler)
+          .addOrReplaceJsDoc(parent, "/** @const */\n")
+          .build();
+    }
+    return null;
+  }
 
-    private boolean matchName(Node n) {
-      for (String closureFn : closureFunctions) {
-        if (n.matchesQualifiedName(closureFn)) {
-          return true;
-        }
-      }
-      return false;
-    }
-
-    public void sortCallsAlphabetically() {
-      Collections.sort(calls, this);
-    }
-
-    @Override
-    public int compare(Node n1, Node n2) {
-      String namespace1 = CheckRequiresAndProvidesSorted.getSortKey(n1);
-      String namespace2 = CheckRequiresAndProvidesSorted.getSortKey(n2);
-      return namespace1.compareTo(namespace2);
-    }
+  private ScriptMetadata getMetadataForScript(Node script) {
+    checkArgument(script.isScript());
+    return this.metadataForEachScript.computeIfAbsent(
+        script, (s) -> ScriptMetadata.create(s, this.compiler));
   }
 }

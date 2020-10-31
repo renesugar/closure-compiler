@@ -38,7 +38,7 @@ import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.JSDocInfoBuilder;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
-import com.google.javascript.rhino.jstype.FunctionBuilder;
+import com.google.javascript.rhino.jstype.FunctionType;
 import com.google.javascript.rhino.jstype.JSType;
 import com.google.javascript.rhino.jstype.JSTypeNative;
 import java.util.Collection;
@@ -57,8 +57,6 @@ import javax.annotation.Nullable;
  * let/const declarations at all.
  *
  * <p>TODO(moz): Try to use MakeDeclaredNamesUnique
- *
- * @author moz@google.com (Michael Zhou)
  */
 public final class Es6RewriteBlockScopedDeclaration extends AbstractPostOrderCallback
     implements HotSwapCompilerPass {
@@ -167,7 +165,7 @@ public final class Es6RewriteBlockScopedDeclaration extends AbstractPostOrderCal
       }
       Var oldVar = scope.getVar(oldName);
       scope.undeclare(oldVar);
-      hoistScope.declare(newName, nameNode, oldVar.input);
+      hoistScope.declare(newName, nameNode, oldVar.getInput());
     }
   }
 
@@ -335,12 +333,12 @@ public final class Es6RewriteBlockScopedDeclaration extends AbstractPostOrderCal
         }
         functionHandledMap.put(function, name);
 
-        if (!loopObjectMap.containsKey(loopNode)) {
-          loopObjectMap.put(loopNode,
-              new LoopObject(
-                  LOOP_OBJECT_NAME + "$" + compiler.getUniqueNameIdSupplier().get()));
-        }
-        LoopObject object = loopObjectMap.get(loopNode);
+        LoopObject object =
+            loopObjectMap.computeIfAbsent(
+                loopNode,
+                (Node k) ->
+                    new LoopObject(
+                        LOOP_OBJECT_NAME + "$" + compiler.getUniqueNameIdSupplier().get()));
         String newPropertyName = createUniquePropertyName(var);
         object.vars.add(var);
         propertyNameMap.put(var, newPropertyName);
@@ -350,7 +348,7 @@ public final class Es6RewriteBlockScopedDeclaration extends AbstractPostOrderCal
     }
 
     private String createUniquePropertyName(Var var) {
-      return LOOP_OBJECT_PROPERTY_NAME + var.name + "$" + uniqueNameIdSupplier.get();
+      return LOOP_OBJECT_PROPERTY_NAME + var.getName() + "$" + uniqueNameIdSupplier.get();
     }
 
     private void transformLoopClosure() {
@@ -540,18 +538,16 @@ public final class Es6RewriteBlockScopedDeclaration extends AbstractPostOrderCal
           i++;
         }
 
-        Node iife = IR.function(
-            IR.name(""),
-            IR.paramList(objectNames),
-            IR.block(returnNode));
+        Node iife = IR.function(IR.name(""), IR.paramList(objectNames), IR.block(returnNode));
         if (shouldAddTypesOnNewAstNodes) {
-          FunctionBuilder functionBuilder = new FunctionBuilder(compiler.getTypeRegistry());
-          functionBuilder
-              .withName("")
-              .withSourceNode(iife)
-              .withParamsNode(compiler.getTypeRegistry().createParameters(objectTypes))
-              .withReturnType(function.getJSType());
-          iife.setJSType(functionBuilder.build());
+          FunctionType iifeType =
+              FunctionType.builder(compiler.getTypeRegistry())
+                  .withName("")
+                  .withSourceNode(iife)
+                  .withParameters(compiler.getTypeRegistry().createParameters(objectTypes))
+                  .withReturnType(function.getJSType())
+                  .buildAndResolve();
+          iife.setJSType(iifeType);
         }
         compiler.reportChangeToChangeScope(iife);
         Node call = IR.call(iife, objectNamesForCall);

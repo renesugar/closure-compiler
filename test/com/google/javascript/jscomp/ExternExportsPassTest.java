@@ -18,6 +18,8 @@ package com.google.javascript.jscomp;
 import static com.google.common.truth.Truth.assertThat;
 
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.testing.NoninjectingCompiler;
+import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import java.util.function.Consumer;
 import org.junit.Before;
 import org.junit.Test;
@@ -48,8 +50,8 @@ public final class ExternExportsPassTest extends CompilerTestCase {
   }
 
   @Override
-  public CompilerOptions getOptions(CompilerOptions options) {
-    super.getOptions(options);
+  public CompilerOptions getOptions() {
+    CompilerOptions options = super.getOptions();
     options.externExportsPath = "externs.js";
     // Check types so we can make sure our exported externs have type information.
     options.setCheckSymbols(true);
@@ -118,6 +120,7 @@ public final class ExternExportsPassTest extends CompilerTestCase {
             "};",
             "/**",
             " * @return {undefined}",
+            " * @this {(typeof a.b.c)}",
             " */",
             "foobar.exportedStaticMethod = function() {",
             "};",
@@ -1069,7 +1072,7 @@ public final class ExternExportsPassTest extends CompilerTestCase {
         lines(
             "/**",
             " * @param {number} a",
-            " * @return {!Iterator<number>}",
+            " * @return {!Iterator<number,?,?>}",
             " */",
             "var externalName = function(a) {",
             "};",
@@ -1091,7 +1094,7 @@ public final class ExternExportsPassTest extends CompilerTestCase {
         lines(
             "/**",
             " * @param {number} a",
-            " * @return {!AsyncGenerator<number>}",
+            " * @return {!AsyncGenerator<number,?,?>}",
             " */",
             "var externalName = function(a) {",
             "};",
@@ -1460,14 +1463,11 @@ public final class ExternExportsPassTest extends CompilerTestCase {
             ""),
         lines(
             "/**",
-            // subclass has no explicit constructor.
-            // The generated one assumes variable args and passes them on to the superclass
-            " * @param {...?} var_args$jscomp$1",
             // TODO(b/123352214): SuperClass should be called Foo in exported @extends annotation
             " * @extends {SuperClass}",
             " * @constructor",
             " */",
-            "var Bar = function(var_args$jscomp$1) {",
+            "var Bar = function() {",
             "};",
             "/**",
             " * @constructor",
@@ -1491,14 +1491,11 @@ public final class ExternExportsPassTest extends CompilerTestCase {
             ""),
         lines(
             "/**",
-            // subclass has no explicit constructor.
-            // The generated one assumes variable args and passes them on to the superclass
-            " * @param {...?} var_args$jscomp$1",
             // TODO(b/123352214): SuperClass should be called Foo in exported @extends annotation
             " * @extends {SuperClass}",
             " * @constructor",
             " */",
-            "var Bar = function(var_args$jscomp$1) {",
+            "var Bar = function() {",
             "};",
             ""));
   }
@@ -1518,14 +1515,11 @@ public final class ExternExportsPassTest extends CompilerTestCase {
             ""),
         lines(
             "/**",
-            // subclass has no explicit constructor.
-            // The generated one assumes variable args and passes them on to the superclass
-            " * @param {...?} var_args$jscomp$1",
             // TODO(b/123352214): SuperClass should be called Foo in exported @extends annotation
             " * @extends {SuperClass}",
             " * @constructor",
             " */",
-            "var Bar = function(var_args$jscomp$1) {",
+            "var Bar = function() {",
             "};",
             ""));
   }
@@ -1692,13 +1686,13 @@ public final class ExternExportsPassTest extends CompilerTestCase {
             "goog.exportSymbol('ns.subns.Foo', ns.subns.Foo);"),
         lines(
             "/**",
-            " @const",
-            " @suppress {const,duplicate}",
+            " * @const",
+            " * @suppress {const,duplicate}",
             " */",
             "var ns = {};",
             "/**",
-            " @const",
-            " @suppress {const,duplicate}",
+            " * @const",
+            " * @suppress {const,duplicate}",
             " */",
             "ns.subns = {};",
             "/**",

@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import java.util.Collections;
@@ -29,12 +30,17 @@ import java.util.Map;
  * Java implementation of the source map parser.
  */
 public class SourceMapObjectParser {
+  // Gson objects are safe to share across threads and are somewhat expensive to construct. Use a
+  // single instance.  This is Safe per gson docs:
+  // https://google.github.io/gson/apidocs/com/google/gson/Gson.html
+  private static final Gson gson = new Gson();
+
   public static SourceMapObject parse(String contents) throws SourceMapParseException {
 
     SourceMapObject.Builder builder = SourceMapObject.builder();
 
     try {
-      JsonObject sourceMapRoot = new Gson().fromJson(contents, JsonObject.class);
+      JsonObject sourceMapRoot = gson.fromJson(contents, JsonObject.class);
 
       builder.setVersion(sourceMapRoot.get("version").getAsInt());
       builder.setFile(getStringOrNull(sourceMapRoot, "file"));
@@ -93,7 +99,7 @@ public class SourceMapObjectParser {
   }
 
   private static String[] getJavaStringArray(JsonElement element) {
-    if (element == null) {
+    if (element == null || element instanceof JsonNull) {
       return null;
     }
     JsonArray array = element.getAsJsonArray();

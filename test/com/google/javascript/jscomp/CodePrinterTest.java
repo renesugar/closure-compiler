@@ -17,8 +17,9 @@
 package com.google.javascript.jscomp;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assertWithMessage;
 import static com.google.javascript.jscomp.CompilerTestCase.lines;
+import static com.google.javascript.rhino.testing.NodeSubject.assertNode;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
@@ -33,34 +34,191 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-
 @RunWith(JUnit4.class)
 public final class CodePrinterTest extends CodePrinterTestBase {
   private static final Joiner LINE_JOINER = Joiner.on('\n');
 
   @Test
-  public void testUnescapedUnicodeLineSeparator() {
-    languageMode = LanguageMode.ECMASCRIPT_2015;
+  public void testBigInt() {
+    languageMode = LanguageMode.UNSUPPORTED;
+    assertPrintSame("1n");
+    assertPrint("0b10n", "2n");
+    assertPrint("0o3n", "3n");
+    assertPrint("0x4n", "4n");
+    assertPrintSame("-5n");
+    assertPrint("-0b110n", "-6n");
+    assertPrint("-0o7n", "-7n");
+    assertPrint("-0x8n", "-8n");
+  }
+
+  @Test
+  public void testTrailingCommaInArrayAndObjectWithPrettyPrint() {
+    languageMode = LanguageMode.ECMASCRIPT_NEXT_IN;
+    assertPrettyPrintSame("({a:1, b:2, });\n");
+    assertPrettyPrintSame("[1, 2, 3, ];\n");
+    assertPrettyPrintSame("[, ];\n");
+  }
+
+  @Test
+  public void testTrailingCommaInArrayAndObjectWithoutPrettyPrint() {
+    languageMode = LanguageMode.ECMASCRIPT_NEXT_IN;
+    assertPrint("({a:1, b:2,})", "({a:1,b:2})");
+    assertPrint("[1, 2, 3,]", "[1,2,3]");
+
+    // When the last element is empty,  the trailing comma must be kept.
+    assertPrintSame("[,]"); // same as `[undefined]`
+    assertPrintSame("[a,,]"); // same as `[a, undefined]`
+  }
+
+  @Test
+  public void testNoTrailingCommaInEmptyArrayLiteral() {
+    // In cases where we modify the AST we might wind up with an array literal that has no elements
+    // yet still has a trailing comma. This is meant to test for that. We need to build the tree
+    // manually because an array literal with no elements and a trailing comma has a different
+    // meaning: it represents a single undefined element.
+    Node arrLit = IR.arraylit();
+    arrLit.setTrailingComma(true);
+    assertPrettyPrintNode("[]", arrLit);
+  }
+
+  @Test
+  public void testNoTrailingCommaInEmptyObjectLiteral() {
+    // In cases where we modify the AST we might wind up with an object literal that has no elements
+    // yet still has a trailing comma. This is meant to test for that. We need to build the tree
+    // manually because an object literal with no elements and a trailing comma is a syntax error.
+    Node objLit = IR.objectlit();
+    objLit.setTrailingComma(true);
+    assertPrettyPrintNode("{}", objLit);
+  }
+
+  @Test
+  public void testNoTrailingCommaInEmptyParamList() {
+    // In cases where we modify the AST we might wind up with a parameter list that has no elements
+    // yet still has a trailing comma. This is meant to test for that. We need to build the tree
+    // manually because a parameter list with no elements and a trailing comma is a syntax error.
+    Node paramList = IR.paramList();
+    IR.function(IR.name("f"), paramList, IR.block());
+    paramList.setTrailingComma(true);
+    assertPrettyPrintNode("()", paramList);
+  }
+
+  @Test
+  public void testNoTrailingCommaInEmptyCall() {
+    // In cases where we modify the AST we might wind up with a call node that has no elements
+    // yet still has a trailing comma. This is meant to test for that. We need to build the tree
+    // manually because a call node with no elements and a trailing comma is a syntax error.
+    Node call = IR.call(IR.name("f"));
+    call.setTrailingComma(true);
+    assertPrettyPrintNode("f()", call);
+  }
+
+  @Test
+  public void testNoTrailingCommaInEmptyOptChainCall() {
+    // In cases where we modify the AST we might wind up with an optional chain call node that has
+    // no elements yet still has a trailing comma. This is meant to test for that. We need to build
+    // the tree manually because an optional chain call node with no elements and a trailing comma
+    // is a syntax error.
+    Node optChainCall = IR.startOptChainCall(IR.name("f"));
+    optChainCall.setTrailingComma(true);
+    assertPrettyPrintNode("f?.()", optChainCall);
+  }
+
+  @Test
+  public void testNoTrailingCommaInEmptyNew() {
+    // In cases where we modify the AST we might wind up with a new node that has no elements
+    // yet still has a trailing comma. This is meant to test for that. We need to build the tree
+    // manually because a new node with no elements and a trailing comma is a syntax error.
+    Node newNode = IR.newNode(IR.name("f"));
+    newNode.setTrailingComma(true);
+    assertPrettyPrintNode("new f", newNode);
+  }
+
+  @Test
+  public void testTrailingCommaInParameterListWithPrettyPrint() {
+    languageMode = LanguageMode.UNSUPPORTED;
+    assertPrettyPrintSame("function f(a, b, ) {\n}\n");
+    assertPrettyPrintSame("f(1, 2, );\n");
+    assertPrettyPrintSame("f?.(1, 2, );\n");
+    assertPrettyPrintSame("let x = new Number(1, );\n");
+  }
+
+  @Test
+  public void testTrailingCommaInParameterListWithoutPrettyPrint() {
+    languageMode = LanguageMode.UNSUPPORTED;
+    assertPrint("function f(a, b,) {}", "function f(a,b){}");
+    assertPrint("f(1, 2,);", "f(1,2)");
+    assertPrint("f?.(1, 2,);", "f?.(1,2)");
+    assertPrint("let x = new Number(1,);", "let x=new Number(1)");
+  }
+
+  @Test
+  public void optionalChaining() {
+    languageMode = LanguageMode.UNSUPPORTED;
+    assertPrintSame("a.b?.c");
+    assertPrintSame("a.b?.[\"c\"]");
+    assertPrintSame("a.b?.()");
+    assertPrintSame("a?.b.c?.d");
+    assertPrintSame("(a?.b).c");
+    assertPrintSame("(a.b?.c.d).e");
+    assertPrintSame("(a?.[b])[c]");
+    assertPrintSame("(a.b?.())()");
+  }
+
+  @Test
+  public void testUnescapedUnicodeLineSeparator_2018() {
+    languageMode = LanguageMode.ECMASCRIPT_2018;
     assertPrintSame("`\u2028`");
 
-    languageMode = LanguageMode.ECMASCRIPT_NEXT;
+    assertPrint("'\u2028'", "\"\\u2028\"");
+    assertPrint("\"\u2028\"", "\"\\u2028\"");
+
+    outputCharset = UTF_8;
+    // printed as a unicode escape for ES_2018 output
     assertPrint("'\u2028'", "\"\\u2028\"");
     assertPrint("\"\u2028\"", "\"\\u2028\"");
   }
 
   @Test
-  public void testUnescapedUnicodeParagraphSeparator() {
-    languageMode = LanguageMode.ECMASCRIPT_2015;
+  public void testUnescapedUnicodeLineSeparator_2019() {
+    languageMode = LanguageMode.ECMASCRIPT_2019;
+    assertPrint("'\u2028'", "\"\\u2028\"");
+    assertPrint("\"\u2028\"", "\"\\u2028\"");
+
+    outputCharset = UTF_8;
+    // left unescaped for ES_2019 out
+    assertPrint("'\u2028'", "\"\u2028\"");
+    assertPrint("\"\u2028\"", "\"\u2028\"");
+  }
+
+  @Test
+  public void testUnescapedUnicodeParagraphSeparator_2018() {
+    languageMode = LanguageMode.ECMASCRIPT_2018;
     assertPrintSame("`\u2029`");
 
-    languageMode = LanguageMode.ECMASCRIPT_NEXT;
+    assertPrint("'\u2029'", "\"\\u2029\"");
+    assertPrint("\"\u2029\"", "\"\\u2029\"");
+
+    outputCharset = UTF_8;
+    // printed as a unicode escape for ES_2018 output
     assertPrint("'\u2029'", "\"\\u2029\"");
     assertPrint("\"\u2029\"", "\"\\u2029\"");
   }
 
   @Test
+  public void testUnescapedUnicodeParagraphSeparator_2019() {
+    languageMode = LanguageMode.ECMASCRIPT_2019;
+
+    assertPrint("'\u2029'", "\"\\u2029\"");
+    assertPrint("\"\u2029\"", "\"\\u2029\"");
+
+    outputCharset = UTF_8;
+    // left unescaped for ES_2019 out
+    assertPrint("'\u2029'", "\"\u2029\"");
+    assertPrint("\"\u2029\"", "\"\u2029\"");
+  }
+
+  @Test
   public void testOptionalCatchBlock() {
-    useUnsupportedFeatures = true;
     assertPrintSame("try{}catch{}");
     assertPrintSame("try{}catch{}finally{}");
   }
@@ -93,6 +251,32 @@ public final class CodePrinterTest extends CodePrinterTestBase {
   }
 
   @Test
+  public void testNullishCoalesceOperator() {
+    assertPrintSame("x??y??z");
+    // Nullish coalesce is left associative
+    assertPrintSame("x??(y??z)");
+    assertPrint("(x??y)??z", "x??y??z");
+    // // parens are kept because logical AND and logical OR must be separated from '??'
+    assertPrintSame("(x&&y)??z");
+    assertPrintSame("(x??y)||z");
+    assertPrintSame("x??(y||z)");
+    // NOTE: "x&&y??z" is a syntax error tested in ParserTest
+  }
+
+  @Test
+  public void testNullishCoalesceOperator2() {
+    // | has higher precedence than ??
+    assertPrint("(a|b)??c", "a|b??c");
+    assertPrintSame("(a??b)|c");
+    assertPrintSame("a|(b??c)");
+    assertPrint("a??(b|c)", "a??b|c");
+    // ?? has higher precedence than : ? (conditional)
+    assertPrint("(a??b)?(c??d):(e??f)", "a??b?c??d:e??f");
+    assertPrintSame("a??(b?c:d)");
+    assertPrintSame("(a?b:c)??d");
+  }
+
+  @Test
   public void testObjectLiteralWithSpread() {
     languageMode = LanguageMode.ECMASCRIPT_NEXT;
     assertPrintSame("({...{}})");
@@ -103,6 +287,15 @@ public final class CodePrinterTest extends CodePrinterTestBase {
     assertPrintSame("({...x,...y})");
     assertPrintSame("({...x,...f()})");
     assertPrintSame("({...{...{}}})");
+  }
+
+  @Test
+  public void testObjectLiteralWithComma() {
+    languageMode = LanguageMode.ECMASCRIPT_NEXT;
+    assertPrintSame("({[(a,b)]:c})");
+    assertPrintSame("({a:(b,c)})");
+    assertPrintSame("({[(a,b)]:(c,d)})");
+    assertPrintSame("({[(a,b)]:c,[d]:(e,f)})");
   }
 
   @Test
@@ -355,6 +548,11 @@ public final class CodePrinterTest extends CodePrinterTestBase {
                     IR.name("c"),
                     IR.name("d"))));
     assertPrintNode("var a=(b,c,d)", node);
+  }
+
+  @Test
+  public void testPrettyPrintJSDoc() {
+    assertPrettyPrintSame("/** @type {number} */ \nvar x;\n");
   }
 
   @Test
@@ -676,6 +874,14 @@ public final class CodePrinterTest extends CodePrinterTestBase {
   }
 
   @Test
+  public void testForIn() {
+    assertPrintSame("for(a in b)c");
+    assertPrintSame("for(var a in b)c");
+    assertPrintSame("for(var a in b=c)d");
+    assertPrintSame("for(var a in b,c)d");
+  }
+
+  @Test
   public void testPrintInOperatorInForLoop() {
     // Check for in expression in for's init expression.
     // Check alone, with + (higher precedence), with ?: (lower precedence),
@@ -715,12 +921,19 @@ public final class CodePrinterTest extends CodePrinterTestBase {
         "var a={}; for(var i = () => (0 in a); i;) {}", "var a={};for(var i=()=>(0 in a);i;);");
     assertPrint(
         "var a={}; for(var i = () => ({} in a); i;) {}", "var a={};for(var i=()=>({}in a);i;);");
+
+    // And inside a destructuring declaration
+    assertPrint(
+        "var a={}; for(var {noop} = (\"prop\" in a); noop;) {}",
+        "var a={};for(var {noop}=(\"prop\"in a);noop;);");
   }
 
   @Test
   public void testForOf() {
     assertPrintSame("for(a of b)c");
     assertPrintSame("for(var a of b)c");
+    assertPrintSame("for(var a of b=c)d");
+    assertPrintSame("for(var a of(b,c))d");
   }
 
   // In pretty-print mode, make sure there is a space before and after the 'of' in a for/of loop.
@@ -737,6 +950,8 @@ public final class CodePrinterTest extends CodePrinterTestBase {
 
     assertPrintSame("for await(a of b)c");
     assertPrintSame("for await(var a of b)c");
+    assertPrintSame("for await(var a of b=c)d");
+    assertPrintSame("for await(var a of(b,c))d");
   }
 
   // In pretty-print mode, make sure there is a space before and after the 'of' in a for/of loop.
@@ -863,19 +1078,19 @@ public final class CodePrinterTest extends CodePrinterTestBase {
   public void testPreferLineBreakAtEndOfFile() {
     // short final line, no previous break, do nothing
     assertLineBreakAtEndOfFile(
-        "\"1234567890\";",
+        "\"1234567890\";", //
         "\"1234567890\"",
-        "\"1234567890\"");
+        "\"1234567890\";\n");
 
     // short final line, shift previous break to end
     assertLineBreakAtEndOfFile(
         "\"123456789012345678901234567890\";\"1234567890\"",
         "\"123456789012345678901234567890\";\n\"1234567890\"",
-        "\"123456789012345678901234567890\"; \"1234567890\";\n");
+        "\"123456789012345678901234567890\";\n\"1234567890\";\n");
     assertLineBreakAtEndOfFile(
         "var12345678901234567890123456 instanceof Object;",
         "var12345678901234567890123456 instanceof\nObject",
-        "var12345678901234567890123456 instanceof Object;\n");
+        "var12345678901234567890123456 instanceof\nObject;\n");
 
     // long final line, no previous break, add a break at end
     assertLineBreakAtEndOfFile(
@@ -1216,9 +1431,9 @@ public final class CodePrinterTest extends CodePrinterTestBase {
     assertPrettyPrint("var x = 0xFE;", "var x = 254;\n");
     assertPrettyPrintSame("var x = 1" + String.format("%0100d", 0) + ";\n"); // a googol
     assertPrettyPrintSame("f(10000);\n");
-    assertPrettyPrintSame("var x = -10000;\n");
-    assertPrettyPrintSame("var x = y - -10000;\n");
-    assertPrettyPrintSame("f(-10000);\n");
+    assertPrettyPrint("var x = -10000;\n", "var x = -1E4;\n");
+    assertPrettyPrint("var x = y - -10000;\n", "var x = y - -1E4;\n");
+    assertPrettyPrint("f(-10000);\n", "f(-1E4);\n");
     assertPrettyPrintSame("x < 2592000;\n");
     assertPrettyPrintSame("x < 1000.000;\n");
     assertPrettyPrintSame("x < 1000.912;\n");
@@ -1262,7 +1477,6 @@ public final class CodePrinterTest extends CodePrinterTestBase {
     // TODO(johnlenz): It would be nice if there were some way to preserve
     // typedefs but currently they are resolved into the basic types in the
     // type registry.
-    // NOTE(sdh): The type inferrence does not correctly remove null
     assertTypeAnnotations(
         LINE_JOINER.join(
             "/** @const */ var goog = {};",
@@ -1275,7 +1489,7 @@ public final class CodePrinterTest extends CodePrinterTestBase {
             "/** @const */ goog.java = {};",
             "goog.java.Long;",
             "/**",
-            " * @param {(Array<number>|null)} a",
+            " * @param {!Array<number>} a",
             " * @return {undefined}",
             " */",
             "function f(a) {\n}\n"));
@@ -1291,15 +1505,84 @@ public final class CodePrinterTest extends CodePrinterTestBase {
   }
 
   @Test
-  public void testTypeAnnotationsNamespace() {
+  public void testTypeAnnotationsNamespace_varWithoutJSDoc() {
     assertTypeAnnotations(
         LINE_JOINER.join(
+            "var a = {};", //
+            "/** @constructor */ a.Foo = function(){}"),
+        LINE_JOINER.join(
+            "var a = {};", //
+            "/**",
+            " * @constructor",
+            " */",
+            "a.Foo = function() {",
+            "};\n"));
+  }
+
+  @Test
+  public void testTypeAnnotationsNamespace_varWithConstJSDoc() {
+    assertTypeAnnotations(
+        LINE_JOINER.join(
+            "/** @const */", //
             "var a = {};",
             "/** @constructor */ a.Foo = function(){}"),
         LINE_JOINER.join(
+            "/** @const */ var a = {};",
+            "/**",
+            " * @constructor",
+            " */",
+            "a.Foo = function() {",
+            "};\n"));
+  }
+
+  @Test
+  public void testTypeAnnotationsNamespace_constDeclarationWithoutJSDoc() {
+    assertTypeAnnotations(
+        LINE_JOINER.join(
+            "const a = {};", //
+            "/** @constructor */ a.Foo = function(){}"),
+        LINE_JOINER.join(
+            "const a = {};", //
+            "/**",
+            " * @constructor",
+            " */",
+            "a.Foo = function() {",
+            "};\n"));
+  }
+
+  @Test
+  public void testTypeAnnotationsNamespace_constDeclarationWithJSDoc() {
+    assertTypeAnnotations(
+        LINE_JOINER.join(
+            "/** @export */",
+            "const a = {};", //
+            "/** @constructor */ a.Foo = function(){}"),
+        LINE_JOINER.join(
+            "/** @export */ const a = {};", //
+            "/**",
+            " * @constructor",
+            " */",
+            "a.Foo = function() {",
+            "};\n"));
+  }
+
+  @Test
+  public void testTypeAnnotationsNamespace_qnameWithConstJSDoc() {
+    assertTypeAnnotations(
+        LINE_JOINER.join(
+            "/** @const */",
             "var a = {};",
-            "/**\n * @constructor\n */",
-            "a.Foo = function() {\n};\n"));
+            "/** @const */",
+            "a.b = {};",
+            "/** @constructor */ a.b.Foo = function(){}"),
+        LINE_JOINER.join(
+            "/** @const */ var a = {};",
+            "/** @const */ a.b = {};",
+            "/**",
+            " * @constructor",
+            " */",
+            "a.b.Foo = function() {",
+            "};\n"));
   }
 
   @Test
@@ -1375,7 +1658,7 @@ public final class CodePrinterTest extends CodePrinterTestBase {
             " * @return {number}",
             " */",
             "a.Foo.prototype.foo = function(foo) {\n  return 3;\n};",
-            "/** @type {!Array} */",
+            "/** @type {!Array<?>} */",
             "a.Foo.prototype.bar = [];\n"));
   }
 
@@ -1756,7 +2039,7 @@ public final class CodePrinterTest extends CodePrinterTestBase {
         lines(
             "function f() {",
             "  return (/**",
-            "   @return {number}",
+            "   * @return {number}",
             "   */",
             "  function() {",
             "    return 42;",
@@ -1770,13 +2053,92 @@ public final class CodePrinterTest extends CodePrinterTestBase {
     String js =
         LINE_JOINER.join(
             "/**",
-            " @type {number}",
-            " @deprecated See {@link replacementClass} for more details.",
+            " * @type {number}",
+            " * @deprecated See {@link replacementClass} for more details.",
             " */",
             "var x;",
             "");
 
     assertPrettyPrint(js, js);
+  }
+
+  @Test
+  public void testNonJSDocCommentsPrinted_nonTrailing_blockComment() {
+    preserveNonJSDocComments = true;
+    assertPrettyPrint(
+        "/* testComment */ function Foo(){}", "/* testComment */ function Foo() {\n}\n");
+  }
+
+  @Test
+  public void testNonJSDocCommentsPrinted_nonTrailing_lineComment() {
+    preserveNonJSDocComments = true;
+    assertPrettyPrint("// testComment\nfunction Foo(){}", "// testComment\nfunction Foo() {\n}\n");
+  }
+
+  @Test
+  public void testNonJSDocCommentsPrinted_betweenCode_sameLine() {
+    preserveNonJSDocComments = true;
+
+    assertPrettyPrint(
+        "function /* testComment */ Foo(){}", "function/* testComment */ Foo() {\n}\n");
+  }
+
+  @Test
+  public void testNonJSDocCommentsPrinted_betweenCode_differentLines() {
+    preserveNonJSDocComments = true;
+    assertPrettyPrint(
+        "function /* testComment */\nFoo(){}", "function/* testComment */\nFoo() {\n}\n");
+  }
+
+  @Test
+  public void testNonJSDocCommentsPrinted_nonTrailing_inlineComments() {
+    preserveNonJSDocComments = true;
+    // tests inline comments in parameter lists are parsed and printed
+    assertPrettyPrint(
+        "function Foo(/*first*/ x, /* second*/ y) {}",
+        "function Foo(/*first*/ x, /* second*/ y) {\n}\n");
+  }
+
+  // Args on new line are condensed onto the same line by prettyPrint
+  @Test
+  public void testArgs_noComments_newLines() {
+    assertPrettyPrint(
+        lines(" var rpcid = new RpcId(a,\n b, \nc);"), lines("var rpcid = new RpcId(a, b, c);\n"));
+  }
+
+  // Comments are printed when args on new line are condensed onto the same line by prettyPrint
+  @Test
+  public void testNonJSDocCommentsPrinted_nonTrailing_inlineComments_newLines() {
+    preserveNonJSDocComments = true;
+    assertPrettyPrint(
+        lines(" var rpcid = new RpcId(a,\n /* comment1 */ b, \n/* comment1 */ c);"),
+        lines("var rpcid = new RpcId(a, /* comment1 */ b, /* comment1 */ c);\n"));
+  }
+
+  @Test
+  public void testNonJSDocCommentsPrinted_trailing_and_nonTrailing_inlineComments() {
+    preserveNonJSDocComments = true;
+    // tests inline trailing comments in parameter lists are parsed and printed
+    assertPrettyPrint(
+        "function Foo(x //first\n, /* second*/ y) {}",
+        "function Foo(x //first\n, /* second*/ y) {\n}\n");
+  }
+
+  @Test
+  public void testNonJSDocCommentsPrinted_trailing_inlineComments_paramList() {
+    preserveNonJSDocComments = true;
+    assertPrettyPrint("function Foo(x) {}", "function Foo(x) {\n}\n");
+    assertPrettyPrint("function Foo(x /*first*/) {}", "function Foo(x /*first*/) {\n}\n");
+    assertPrettyPrint("function Foo(x //first\n) {}", "function Foo(x //first\n) {\n}\n");
+  }
+
+  // Same as above, but tests argList instead of Param list
+  @Test
+  public void testNonJSDocCommentsPrinted_trailing_inlineComments_callArgList() {
+    preserveNonJSDocComments = true;
+    assertPrettyPrint("foo(x);", "foo(x);\n");
+    assertPrettyPrint("foo(x /*first*/);", "foo(x /*first*/);\n");
+    assertPrettyPrint("foo(x //first\n);", "foo(x //first\n);\n");
   }
 
   private void assertPrettyPrintSame(String js) {
@@ -1965,18 +2327,9 @@ public final class CodePrinterTest extends CodePrinterTestBase {
 
   private void testReparse(String code) {
     Compiler compiler = new Compiler();
-    Node parse1 = parse(code);
-    Node parse2 = parse(new CodePrinter.Builder(parse1).build());
-    String explanation = parse1.checkTreeEquals(parse2);
-    assertWithMessage(
-            "\nExpected: "
-                + compiler.toSource(parse1)
-                + "\nResult: "
-                + compiler.toSource(parse2)
-                + "\n"
-                + explanation)
-        .that(explanation)
-        .isNull();
+    Node parseOnce = parse(code);
+    Node parseTwice = parse(new CodePrinter.Builder(parseOnce).build());
+    assertNode(parseTwice).usingSerializer(compiler::toSource).isEqualTo(parseOnce);
   }
 
   @Test
@@ -2091,6 +2444,29 @@ public final class CodePrinterTest extends CodePrinterTestBase {
     n.getFirstFirstChild().getFirstChild().putBooleanProp(
         Node.DIRECT_EVAL, false);
     assertPrintNode("(0,eval)(\"1\")", n);
+  }
+
+  @Test
+  public void freeCallOptChain() {
+    Node n = parse("(a?.b)()");
+    Node call = n.getFirstFirstChild();
+    assertThat(call.isCall()).isTrue();
+    call.putBooleanProp(Node.FREE_CALL, true);
+    assertPrintNode("(0,a?.b)()", n);
+  }
+
+  @Test
+  public void freeCallOptChainOptCall() {
+    Node n = parse("(a?.b)?.()");
+    Node call = n.getFirstFirstChild();
+    assertThat(call.isOptChainCall()).isTrue();
+    call.putBooleanProp(Node.FREE_CALL, true);
+    assertPrintNode("(0,a?.b)?.()", n);
+  }
+
+  @Test
+  public void optionalChainCalleeForNewRequiresParentheses() {
+    assertPrintSame("new (a?.b)");
   }
 
   @Test
@@ -2626,9 +3002,9 @@ public final class CodePrinterTest extends CodePrinterTestBase {
 
     assertPrintSame(
         LINE_JOINER.join(
-            "/**",
-            " @const",
-            " @suppress {const,duplicate}",
+            "/**", //
+            " * @const",
+            " * @suppress {const,duplicate}",
             " */",
             "var ns={}"));
   }
@@ -2714,6 +3090,13 @@ public final class CodePrinterTest extends CodePrinterTestBase {
   }
 
   @Test
+  public void testImportMeta() {
+    assertPrintSame("import.meta");
+    assertPrintSame("import.meta.url");
+    assertPrintSame("console.log(import.meta.url)");
+  }
+
+  @Test
   public void testGeneratorYield() {
     assertPrintSame("function*f(){yield 1}");
     assertPrintSame("function*f(){yield}");
@@ -2747,7 +3130,10 @@ public final class CodePrinterTest extends CodePrinterTestBase {
   @Test
   public void testMemberGeneratorYield1() {
     assertPrintSame("class C{*member(){(yield 1)+(yield 1)}}");
+    assertPrintSame("class C{*[0](){(yield 1)+(yield 1)}}");
     assertPrintSame("var obj={*member(){(yield 1)+(yield 1)}}");
+    assertPrintSame("var obj={*[0](){(yield 1)+(yield 1)}}");
+    assertPrintSame("var obj={[0]:function*(){(yield 1)+(yield 1)}}");
   }
 
   @Test
@@ -2819,6 +3205,7 @@ public final class CodePrinterTest extends CodePrinterTestBase {
     languageMode = LanguageMode.ECMASCRIPT_NEXT;
     assertPrintSame("o={async m(){}}");
     assertPrintSame("o={async[a+b](){}}");
+    assertPrintSame("o={[0]:async function(){}}"); // (not technically a method)
     assertPrintSame("class C{async m(){}}");
     assertPrintSame("class C{async[a+b](){}}");
     assertPrintSame("class C{static async m(){}}");
@@ -2830,6 +3217,7 @@ public final class CodePrinterTest extends CodePrinterTestBase {
     languageMode = LanguageMode.ECMASCRIPT_NEXT;
     assertPrintSame("o={async *m(){}}");
     assertPrintSame("o={async*[a+b](){}}");
+    assertPrintSame("o={[0]:async*function(){}}"); // (not technically a method)
     assertPrintSame("class C{async *m(){}}");
     assertPrintSame("class C{async*[a+b](){}}");
     assertPrintSame("class C{static async *m(){}}");
@@ -2878,6 +3266,19 @@ public final class CodePrinterTest extends CodePrinterTestBase {
     // Parens required for first operand to a conditional, but not the rest.
     assertPrint("((x)=>1)?a:b", "(x=>1)?a:b");
     assertPrint("x?((x)=>0):((x)=>1)", "x?x=>0:x=>1");
+  }
+
+  @Test
+  public void testParensAroundVariableDeclarator() {
+    assertPrintSame("var o=(test++,{one:1})");
+    assertPrintSame("({one}=(test++,{one:1}))");
+    assertPrintSame("[one]=(test++,[1])");
+
+    assertPrintSame("var {one}=(test++,{one:1})");
+    assertPrintSame("var [one]=(test++,[1])");
+    assertPrint(
+        "var {one}=/** @type {{one: number}} */(test++,{one:1})", "var {one}=(test++,{one:1})");
+    assertPrint("var [one]=/** @type {!Array<number>} */(test++,[1])", "var [one]=(test++,[1])");
   }
 
   @Test
@@ -3093,6 +3494,9 @@ public final class CodePrinterTest extends CodePrinterTestBase {
 
     // Substitution without padding.
     assertPrintSame("`Unbroken${x}string`");
+
+    // Template strings terminate statements if needed.
+    assertPrintSame("let a;`a`");
   }
 
   @Test
@@ -3213,26 +3617,27 @@ public final class CodePrinterTest extends CodePrinterTestBase {
 
   @Test
   public void testEs6GoogModule() {
-    String code = ""
-        + "goog.module('foo.bar');\n"
-        + "const STR = '3';\n"
-        + "function fn() {\n"
-        + "  alert(STR);\n"
-        + "}\n"
-        + "exports.fn = fn;\n";
-    String expectedCode = ""
-        + "goog.module('foo.bar');\n"
-        + "void 0;\n"
-        + "var module$exports$foo$bar = {};\n"
-        + "const STR = '3';\n"
-        + "module$exports$foo$bar.fn = function fn() {\n"
-        + "  alert(STR);\n"
-        + "};\n";
+    String code =
+        lines(
+            "goog.module('foo.bar');",
+            "const STR = '3';",
+            "function fn() {",
+            "  alert(STR);",
+            "}",
+            "exports.fn = fn;");
+    String expectedCode =
+        lines(
+            "goog.module('foo.bar');",
+            "var module$exports$foo$bar = {};",
+            "const STR = '3';",
+            "function fn() {",
+            "  alert(STR);",
+            "}",
+            "exports.fn = fn;\n");
 
     CompilerOptions compilerOptions = new CompilerOptions();
     compilerOptions.setClosurePass(true);
     compilerOptions.setPreserveDetailedSourceInfo(true);
-    compilerOptions.setChecksOnly(true);
     compilerOptions.setContinueAfterErrors(true);
     Compiler compiler = new Compiler();
     compiler.disableThreads();
@@ -3312,30 +3717,29 @@ public final class CodePrinterTest extends CodePrinterTestBase {
         + "  alert(Quux.someProperty);\n"
         + "}\n"
         + "}); // goog.scope\n";
-    String expectedCode = ""
-        + "/** @const */ var $jscomp = $jscomp || {};\n"
-        + "/** @const */ $jscomp.scope = {};\n"
-        + "/** @const */ var foo = {};\n"
-        + "/** @const */ foo.bar = {};\n"
-        + "goog.provide('foo.bar');\n"
-        + "goog.require('baz.qux.Quux');\n"
-        + "goog.require('foo.ScopedType');\n"
-        + "/**\n"
-        + " @param {ScopedType} obj\n"
-        + " */\n"
-        + "var fn = /**\n"
-        + " @param {ScopedType} obj\n"
-        + " */\n"
-        + "function(obj) {\n"
-        + "  alert(STR);\n"
-        + "  alert(Quux.someProperty);\n"
-        + "};\n"
-        + "var STR = '3';\n";
+    String expectedCode =
+        ""
+            + "/** @const */ var foo = {};\n"
+            + "/** @const */ foo.bar = {};\n"
+            + "goog.provide('foo.bar');\n"
+            + "goog.require('baz.qux.Quux');\n"
+            + "goog.require('foo.ScopedType');\n"
+            + "/**\n"
+            + " * @param {ScopedType} obj\n"
+            + " */\n"
+            + "var fn = /**\n"
+            + " * @param {ScopedType} obj\n"
+            + " */\n"
+            + "function(obj) {\n"
+            + "  alert(STR);\n"
+            + "  alert(Quux.someProperty);\n"
+            + "};\n"
+            + "var STR = '3';\n";
 
     CompilerOptions compilerOptions = new CompilerOptions();
+    compilerOptions.setChecksOnly(true);
     compilerOptions.setClosurePass(true);
     compilerOptions.setPreserveDetailedSourceInfo(true);
-    compilerOptions.setChecksOnly(true);
     compilerOptions.setCheckTypes(true);
     compilerOptions.setContinueAfterErrors(true);
     compilerOptions.setPreserveClosurePrimitives(true);

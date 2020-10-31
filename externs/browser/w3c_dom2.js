@@ -87,9 +87,9 @@ Document.prototype.createTreeWalker = function(
 Document.prototype.getElementsByTagNameNS = function(namespace, name) {};
 
 /**
- * @param {Node} externalNode
- * @param {boolean} deep
- * @return {Node}
+ * @param {!Node} externalNode
+ * @param {boolean=} deep
+ * @return {!Node}
  * @see https://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/core.html#Core-Document-importNode
  */
 Document.prototype.importNode = function(externalNode, deep) {};
@@ -251,29 +251,6 @@ HTMLDocument.prototype.cookie;
 HTMLDocument.prototype.open = function(opt_mimeType, opt_replace) {};
 
 /**
- * @return {undefined}
- * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-98948567
- * @override
- */
-HTMLDocument.prototype.close = function() {};
-
-/**
- * @param {!TrustedHTML|string} text
- * @return {undefined}
- * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-75233634
- * @override
- */
-HTMLDocument.prototype.write = function(text) {};
-
-/**
- * @param {!TrustedHTML|string} text
- * @return {undefined}
- * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-35318390
- * @override
- */
-HTMLDocument.prototype.writeln = function(text) {};
-
-/**
  * @param {string} elementName
  * @return {!NodeList<!Element>}
  * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-71555259
@@ -425,13 +402,6 @@ TreeWalker.prototype.currentNode;
  * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-58190037
  */
 function HTMLElement() {}
-
-/**
- * @implicitCast
- * @type {string}
- * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-63534901
- */
-HTMLElement.prototype.id;
 
 /**
  * @type {string}
@@ -733,7 +703,6 @@ function HTMLFormControlsCollection() {}
  * @see https://html.spec.whatwg.org/multipage/infrastructure.html#dom-htmlformcontrolscollection-nameditem
  * @nosideeffects
  * @override
- * @suppress {newCheckTypes}
  */
 HTMLFormControlsCollection.prototype.namedItem = function(name) {};
 
@@ -977,6 +946,20 @@ HTMLOptionElement.prototype.text;
  * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-6185554
  */
 HTMLOptionElement.prototype.value;
+
+
+
+/**
+ * @constructor
+ * @extends {HTMLOptionElement}
+ * @param {*=} opt_text
+ * @param {*=} opt_value
+ * @param {*=} opt_defaultSelected
+ * @param {*=} opt_selected
+ */
+function Option(opt_text, opt_value, opt_defaultSelected, opt_selected) {}
+
+
 
 /**
  * @constructor
@@ -2472,7 +2455,7 @@ HTMLTableRowElement.prototype.deleteCell = function(index) {};
 
 /**
  * @param {number} index
- * @return {HTMLElement}
+ * @return {!HTMLElement}
  * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-68927016
  */
 HTMLTableRowElement.prototype.insertCell = function(index) {};
@@ -2734,31 +2717,254 @@ HTMLIFrameElement.prototype.src;
 HTMLIFrameElement.prototype.width;
 
 /**
- * @type {number}
+ * @const {number}
  * @see http://www.w3.org/TR/DOM-Level-2-Core/core.html#ID-258A00AF
  */
-DOMException.INVALID_STATE_ERR = 11;
+DOMException.INVALID_STATE_ERR;
 
 /**
- * @type {number}
+ * @const {number}
  * @see http://www.w3.org/TR/DOM-Level-2-Core/core.html#ID-258A00AF
  */
-DOMException.SYNTAX_ERR = 12;
+DOMException.SYNTAX_ERR;
 
 /**
- * @type {number}
+ * @const {number}
  * @see http://www.w3.org/TR/DOM-Level-2-Core/core.html#ID-258A00AF
  */
-DOMException.INVALID_MODIFICATION_ERR = 13;
+DOMException.INVALID_MODIFICATION_ERR;
 
 /**
- * @type {number}
+ * @const {number}
  * @see http://www.w3.org/TR/DOM-Level-2-Core/core.html#ID-258A00AF
  */
-DOMException.NAMESPACE_ERR = 14;
+DOMException.NAMESPACE_ERR;
 
 /**
- * @type {number}
+ * @const {number}
  * @see http://www.w3.org/TR/DOM-Level-2-Core/core.html#ID-258A00AF
  */
-DOMException.INVALID_ACCESS_ERR = 15;
+DOMException.INVALID_ACCESS_ERR;
+/**
+ * @type {boolean}
+ * @see https://developer.mozilla.org/en/DOM/window.closed
+ */
+Window.prototype.closed;
+
+/**
+ * @type {HTMLObjectElement|HTMLIFrameElement|null}
+ * @see https://developer.mozilla.org/en/DOM/window.frameElement
+ */
+Window.prototype.frameElement;
+
+/**
+ * Allows lookup of frames by index or by name.
+ * @type {!Window}
+ * @see https://developer.mozilla.org/en/DOM/window.frames
+ */
+Window.prototype.frames;
+
+/**
+ * @type {!History}
+ * @suppress {duplicate}
+ * @see https://developer.mozilla.org/en/DOM/window.history
+ */
+var history;
+
+/**
+ * @type {!History}
+ * @see https://developer.mozilla.org/en/DOM/window.history
+ */
+Window.prototype.history;
+
+/**
+ * Returns the number of frames (either frame or iframe elements) in the
+ * window.
+ *
+ * @type {number}
+ * @see https://developer.mozilla.org/en/DOM/window.length
+ */
+Window.prototype.length;
+
+/**
+ * Location has an exception in the DeclaredGlobalExternsOnWindow pass
+ * so we have to manually include it:
+ * https://github.com/google/closure-compiler/blob/master/src/com/google/javascript/jscomp/DeclaredGlobalExternsOnWindow.java#L116
+ *
+ * @type {!Location}
+ * @implicitCast
+ * @see https://developer.mozilla.org/en/DOM/window.location
+ */
+Window.prototype.location;
+
+/**
+
+ * @type {string}
+ * @see https://developer.mozilla.org/en/DOM/window.name
+ */
+Window.prototype.name;
+
+/**
+ * @type {Navigator}
+ * @see https://developer.mozilla.org/en/DOM/window.navigator
+ */
+Window.prototype.navigator;
+
+/**
+ * @type {?Window}
+ * @see https://developer.mozilla.org/en/DOM/window.opener
+ */
+Window.prototype.opener;
+
+/**
+ * @type {!Window}
+ * @see https://developer.mozilla.org/en/DOM/window.parent
+ */
+Window.prototype.parent;
+
+/**
+ * @type {!Window}
+ * @see https://developer.mozilla.org/en/DOM/window.self
+ */
+Window.prototype.self;
+
+/**
+ * @type {?string}
+ * @see https://developer.mozilla.org/en/DOM/window.status
+ */
+Window.prototype.status;
+
+/**
+ * @interface
+ * @see https://html.spec.whatwg.org/multipage/window-object.html#the-status-bar-barprop-object
+ */
+function BarProp() {}
+
+/** @const {boolean} */
+BarProp.prototype.visible;
+
+/**
+ * @type {!BarProp}
+ * @see https://developer.mozilla.org/en/DOM/window.locationbar
+ */
+Window.prototype.locationbar;
+
+/**
+ * @type {!BarProp}
+ * @see https://developer.mozilla.org/en/DOM/window.menubar
+ */
+Window.prototype.menubar;
+
+/**
+ * @type {!BarProp}
+ * @see https://developer.mozilla.org/en/DOM/window.personalbar
+ */
+Window.prototype.personalbar;
+
+
+/**
+ * @type {!BarProp}
+ * @see https://developer.mozilla.org/en/DOM/window.scrollbars
+ */
+Window.prototype.scrollbars;
+
+/**
+ * @type {!BarProp}
+ * @see https://developer.mozilla.org/en/DOM/window.statusbar
+ */
+Window.prototype.statusbar;
+
+/**
+ * @type {!BarProp}
+ * @see https://developer.mozilla.org/en/DOM/window.toolbar
+ */
+Window.prototype.toolbar;
+
+/**
+ * @type {!Window}
+ * @see https://developer.mozilla.org/en/DOM/window.self
+ */
+Window.prototype.top;
+
+/**
+ * @type {!Window}
+ * @see https://developer.mozilla.org/en/DOM/window.self
+ */
+Window.prototype.window;
+
+/**
+ * @param {*} message
+ * @see https://developer.mozilla.org/en/DOM/window.alert
+ * @return {undefined}
+ */
+Window.prototype.alert = function(message) {};
+
+/**
+ * @param {*} message
+ * @return {boolean}
+ * @see https://developer.mozilla.org/en/DOM/window.confirm
+ */
+Window.prototype.confirm = function(message) {};
+
+/**
+ * @param {string} message
+ * @param {string=} value
+ * @return {?string}
+ * @see https://developer.mozilla.org/en/DOM/window.prompt
+ */
+Window.prototype.prompt = function(message, value) {};
+
+/**
+ * @see https://developer.mozilla.org/en/DOM/window.blur
+ * @return {undefined}
+ */
+Window.prototype.blur = function() {};
+
+/**
+ * @see https://developer.mozilla.org/en/DOM/window.close
+ * @return {undefined}
+ */
+Window.prototype.close = function() {};
+
+/**
+ * @see https://developer.mozilla.org/en/DOM/window.focus
+ * @return {undefined}
+ */
+Window.prototype.focus = function() {};
+
+/**
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/Window/print
+ * @return {undefined}
+ */
+Window.prototype.print = function() {};
+
+/**
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/Window/stop
+ * @return {undefined}
+ */
+Window.prototype.stop = function() {};
+
+/**
+ * @param {*=} url
+ * @param {string=} windowName
+ * @param {string=} windowFeatures
+ * @param {boolean=} replace
+ * @return {Window}
+ * @see http://msdn.microsoft.com/en-us/library/ms536651(VS.85).aspx
+ */
+Window.prototype.open = function(url, windowName, windowFeatures, replace) {};
+
+/**
+ * @type {string}
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/Element/innerHTML
+ * @implicitCast
+ */
+Element.prototype.innerHTML;
+
+/**
+ * @type {string}
+ * @implicitCast
+ * @see https://w3c.github.io/DOM-Parsing/#extensions-to-the-element-interface
+ */
+Element.prototype.outerHTML;
+

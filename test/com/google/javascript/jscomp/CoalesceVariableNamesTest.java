@@ -35,11 +35,6 @@ public final class CoalesceVariableNamesTest extends CompilerTestCase {
   private boolean usePseudoName = false;
 
   @Override
-  protected int getNumRepetitions() {
-    return 1;
-  }
-
-  @Override
   @Before
   public void setUp() throws Exception {
     super.setUp();
@@ -105,6 +100,53 @@ public final class CoalesceVariableNamesTest extends CompilerTestCase {
   }
 
   @Test
+  public void testCoaleseLetAndConst() {
+    inFunction(
+        "let x; const y = 1; x = y + 1; return x",
+        // `let` must become `var`, because we might be coalescing
+        // variables declared in different blocks.
+        // See testLetAndConstDifferentBlock()
+        "var x;       x = 1; x = x + 1; return x");
+  }
+
+  @Test
+  public void testLetAndConstDifferentBlock() {
+    inFunction(
+        "if(1) { const x = 0; x } else { let y = 0; y }",
+        "if(1) {   var x = 0; x } else {     x = 0; x }");
+  }
+
+  @Test
+  public void testCoalesceLetRequiresInitWithinALoop() {
+    inFunction(
+        lines(
+            "", //
+            "for (let i = 0; i < 3; ++i) {",
+            "  let something;",
+            "  if (i == 0) {",
+            "    const x = 'hi';",
+            "    alert(x);",
+            "    something = x + ' there';",
+            "  }",
+            "  alert(something);",
+            "}",
+            ""),
+        lines(
+            "", //
+            "for (let i = 0; i < 3; ++i) {",
+            // we must initialize `something` on each loop iteration
+            "  var something = void 0;",
+            "  if (i == 0) {",
+            "    something = 'hi';",
+            "    alert(something);", // always alerts 'hi'
+            "    something = something + ' there';",
+            "  }",
+            "  alert(something);",
+            "}",
+            ""));
+  }
+
+  @Test
   public void testMergeThreeVarNames() {
     inFunction(
         "var x,y,z; x=1; x; y=1; y; z=1; z",
@@ -149,6 +191,28 @@ public final class CoalesceVariableNamesTest extends CompilerTestCase {
         "var x = 1; var k; x; x = 1; for (    x in k) { x }");
 
     inFunction("function f(param){ var foo; for([foo] in arr); param }");
+  }
+
+  @Test
+  public void testForLoopCoalesceWithFollowingCode() {
+    inFunction(
+        "for (;;) { const a = 3; } const y = 1; y;", //
+        "for (;;) { var   a = 3; }       a = 1; a;");
+    inFunction(
+        "for (let a = 3;;) { a; } const y = 1; y;", //
+        "for (var a = 3;;) { a; }       a = 1; a;");
+    inFunction(
+        "for (const x in k) { x; } const y = 1; y;", //
+        "for (var   x in k) { x; }       x = 1; x;");
+    inFunction(
+        "for (let x in k) { x; } const y = 1; y;", //
+        "for (var x in k) { x; }       x = 1; x;");
+    inFunction(
+        "for (const x of k) { x; } const y = 1; y;", //
+        "for (var   x of k) { x; }       x = 1; x;");
+    inFunction(
+        "for (let x of k) { x; } const y = 1; y;", //
+        "for (var x of k) { x; }       x = 1; x;");
   }
 
   @Test
@@ -555,6 +619,130 @@ public final class CoalesceVariableNamesTest extends CompilerTestCase {
     test(
         "function f(param) {  var a;  [a = param] = {};  a;  }",
         "function f(param) {  [param = param] = {};  param;  }");
+  }
+
+  @Test
+  public void testSpread_ofArray_consideredRead() {
+    testSame(
+        lines(
+            "function f() {", //
+            "  var a = 9;",
+            "  var b = 6;",
+            "",
+            "  ([...a]);", // Read `a`.
+            "  return b;",
+            "}"));
+
+    test(
+        lines(
+            "function f() {", //
+            "  var a = 9;",
+            "  read(a);",
+            "",
+            "  var b = 6;",
+            "  ([...b]);", // Read `b`.
+            "}"),
+        lines(
+            "function f() {", //
+            "  var a = 9;",
+            "  read(a);",
+            "",
+            "  a = 6;",
+            "  ([...a]);",
+            "}"));
+  }
+
+  @Test
+  public void testSpread_ofObject_consideredRead() {
+    testSame(
+        lines(
+            "function f() {", //
+            "  var a = 9;",
+            "  var b = 6;",
+            "",
+            "  ({...a});", // Read `a`.
+            "  return b;",
+            "}"));
+
+    test(
+        lines(
+            "function f() {", //
+            "  var a = 9;",
+            "  read(a);",
+            "",
+            "  var b = 6;",
+            "  ({...b});", // Read `b`.
+            "}"),
+        lines(
+            "function f() {", //
+            "  var a = 9;",
+            "  read(a);",
+            "",
+            "  a = 6;",
+            "  ({...a});",
+            "}"));
+  }
+
+  @Test
+  public void testRest_fromArray_consideredWrite() {
+    testSame(
+        lines(
+            "function f() {", //
+            "  var a = 9;",
+            "  var b = 6;",
+            "",
+            "  ([...a] = itr);", // Write `a`.
+            "  return b;",
+            "}"));
+
+    test(
+        lines(
+            "function f() {", //
+            "  var a = 9;",
+            "  read(a);",
+            "",
+            "  var b = 6;",
+            "  ([...b] = itr);", // Write `b`.
+            "}"),
+        lines(
+            "function f() {", //
+            "  var a = 9;",
+            "  read(a);",
+            "",
+            "  a = 6;",
+            "  ([...a] = itr);",
+            "}"));
+  }
+
+  @Test
+  public void testRest_fromObject_consideredWrite() {
+    testSame(
+        lines(
+            "function f() {", //
+            "  var a = 9;",
+            "  var b = 6;",
+            "",
+            "  ({...a} = obj);", // Write `a`.
+            "  return b;",
+            "}"));
+
+    test(
+        lines(
+            "function f() {", //
+            "  var a = 9;",
+            "  read(a);",
+            "",
+            "  var b = 6;",
+            "  ({...b} = itr);", // Write `b`.
+            "}"),
+        lines(
+            "function f() {", //
+            "  var a = 9;",
+            "  read(a);",
+            "",
+            "  a = 6;",
+            "  ({...a} = itr);",
+            "}"));
   }
 
   @Test

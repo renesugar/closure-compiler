@@ -36,7 +36,6 @@ import java.util.Map;
  * LiveVariablesAnalysis}. If there is an assignment to variable {@code x} and {@code x} is dead
  * after this assignment, we know that the current content of {@code x} will not be read and this
  * assignment is useless.
- *
  */
 class DeadAssignmentsElimination extends AbstractScopedCallback implements CompilerPass {
 
@@ -123,7 +122,7 @@ class DeadAssignmentsElimination extends AbstractScopedCallback implements Compi
     ControlFlowGraph<Node> cfg = t.getControlFlowGraph();
     liveness =
         new LiveVariablesAnalysis(
-            cfg, functionScope, blockScope, compiler, new Es6SyntacticScopeCreator(compiler));
+            cfg, functionScope, blockScope, compiler, new SyntacticScopeCreator(compiler));
     liveness.analyze();
     Map<String, Var> allVarsInFn = liveness.getAllVariables();
     tryRemoveDeadAssignments(t, cfg, allVarsInFn);
@@ -149,7 +148,7 @@ class DeadAssignmentsElimination extends AbstractScopedCallback implements Compi
   private void tryRemoveDeadAssignments(NodeTraversal t,
       ControlFlowGraph<Node> cfg,
       Map<String, Var> allVarsInFn) {
-    Iterable<DiGraphNode<Node, Branch>> nodes = cfg.getDirectedGraphNodes();
+    Iterable<? extends DiGraphNode<Node, Branch>> nodes = cfg.getNodes();
 
     for (DiGraphNode<Node, Branch> cfgNode : nodes) {
       FlowState<LiveVariableLattice> state =
@@ -257,23 +256,20 @@ class DeadAssignmentsElimination extends AbstractScopedCallback implements Compi
       // If we have an identity assignment such as a=a, always remove it
       // regardless of what the liveness results because it
       // does not change the result afterward.
-      if (rhs != null &&
-          rhs.isName() &&
-          rhs.getString().equals(var.name) &&
-          n.isAssign()) {
+      if (rhs != null && rhs.isName() && rhs.getString().equals(var.getName()) && n.isAssign()) {
         n.removeChild(rhs);
         n.replaceWith(rhs);
         compiler.reportChangeToEnclosingScope(rhs);
         return;
       }
 
-      int index = liveness.getVarIndex(var.name);
+      int index = liveness.getVarIndex(var.getName());
       if (state.getOut().isLive(index)) {
         return; // Variable not dead.
       }
 
       if (state.getIn().isLive(index)
-          && isVariableStillLiveWithinExpression(n, exprRoot, var.name)) {
+          && isVariableStillLiveWithinExpression(n, exprRoot, var.getName())) {
         // The variable is killed here but it is also live before it.
         // This is possible if we have say:
         //    if (X = a && a = C) {..} ; .......; a = S;
@@ -353,6 +349,7 @@ class DeadAssignmentsElimination extends AbstractScopedCallback implements Compi
       switch (n.getParent().getToken()) {
         case OR:
         case AND:
+        case COALESCE:
           // If the currently node is the first child of
           // AND/OR, be conservative only consider the READs
           // of the second operand.
@@ -435,11 +432,12 @@ class DeadAssignmentsElimination extends AbstractScopedCallback implements Compi
       // Conditionals
       case OR:
       case AND:
+      case COALESCE:
         VariableLiveness v1 = isVariableReadBeforeKill(
           n.getFirstChild(), variable);
         VariableLiveness v2 = isVariableReadBeforeKill(
           n.getLastChild(), variable);
-        // With a AND/OR the first branch always runs, but the second is
+        // With a AND/OR/COALESCE the first branch always runs, but the second is
         // may not.
         if (v1 != VariableLiveness.MAYBE_LIVE) {
           return v1;

@@ -48,6 +48,12 @@ public final class CheckJSDocStyle extends AbstractPostOrderCallback implements 
   public static final DiagnosticType MISSING_JSDOC =
       DiagnosticType.disabled("JSC_MISSING_JSDOC", "Function must have JSDoc.");
 
+  public static final DiagnosticType INCORRECT_ANNOTATION_ON_GETTER_SETTER =
+      DiagnosticType.disabled(
+          "JSC_TYPE_ON_GETTER_SETTER",
+          "Getters and setters must not have @type annotations. Did you mean @return or @param"
+              + " instead?");
+
   public static final DiagnosticType MISSING_PARAMETER_JSDOC =
       DiagnosticType.disabled("JSC_MISSING_PARAMETER_JSDOC", "Parameter must have JSDoc.");
 
@@ -61,7 +67,8 @@ public final class CheckJSDocStyle extends AbstractPostOrderCallback implements 
           "Function with non-trivial return must have JSDoc indicating the return type.");
 
   public static final DiagnosticType MUST_BE_PRIVATE =
-      DiagnosticType.disabled("JSC_MUST_BE_PRIVATE", "Property {0} must be marked @private");
+      DiagnosticType.disabled(
+          "JSC_MUST_BE_PRIVATE", "Properties ending with \"_\" must be marked @private");
 
   public static final DiagnosticType MUST_HAVE_TRAILING_UNDERSCORE =
       DiagnosticType.disabled(
@@ -87,20 +94,25 @@ public final class CheckJSDocStyle extends AbstractPostOrderCallback implements 
           "JSC_PREFER_BACKTICKS_TO_AT_SIGN_CODE",
           "Use `some_code` instead of '{'@code some_code'}'.");
 
-  public static final DiagnosticGroup ALL_DIAGNOSTICS =
+  public static final DiagnosticGroup LINT_DIAGNOSTICS =
       new DiagnosticGroup(
           CLASS_DISALLOWED_JSDOC,
           MISSING_JSDOC,
+          INCORRECT_ANNOTATION_ON_GETTER_SETTER,
           MISSING_PARAMETER_JSDOC,
           MIXED_PARAM_JSDOC_STYLES,
           MISSING_RETURN_JSDOC,
-          MUST_BE_PRIVATE,
-          MUST_HAVE_TRAILING_UNDERSCORE,
           OPTIONAL_PARAM_NOT_MARKED_OPTIONAL,
           WRONG_NUMBER_OF_PARAMS,
           INCORRECT_PARAM_NAME,
           EXTERNS_FILES_SHOULD_BE_ANNOTATED,
           PREFER_BACKTICKS_TO_AT_SIGN_CODE);
+
+  public static final DiagnosticGroup UNDERSCORE_DIAGNOSTICS =
+      new DiagnosticGroup(MUST_BE_PRIVATE, MUST_HAVE_TRAILING_UNDERSCORE);
+
+  public static final DiagnosticGroup ALL_DIAGNOSTICS =
+      new DiagnosticGroup(LINT_DIAGNOSTICS, UNDERSCORE_DIAGNOSTICS);
 
   private final AbstractCompiler compiler;
 
@@ -184,12 +196,25 @@ public final class CheckJSDocStyle extends AbstractPostOrderCallback implements 
 
     if (jsDoc != null && name != null) {
       if (compiler.getCodingConvention().isPrivate(name)
-          && !jsDoc.getVisibility().equals(Visibility.PRIVATE)) {
-        t.report(n, MUST_BE_PRIVATE, name);
+          && !jsDoc.getVisibility().equals(Visibility.PRIVATE)
+          && jsDoc.containsDeclaration()) {
+        t.report(n, MUST_BE_PRIVATE);
       } else if (compiler.getCodingConvention().hasPrivacyConvention()
           && !compiler.getCodingConvention().isPrivate(name)
           && jsDoc.getVisibility().equals(Visibility.PRIVATE)) {
         t.report(n, MUST_HAVE_TRAILING_UNDERSCORE, name);
+      }
+    }
+  }
+
+  private static void checkNoTypeOnGettersAndSetters(
+      NodeTraversal t, Node function, JSDocInfo jsDoc) {
+    if (function.getGrandparent().isClassMembers()) {
+      Node memberNode = function.getParent();
+      if (memberNode.isSetterDef() || memberNode.isGetterDef()) {
+        if (jsDoc != null && jsDoc.hasType()) {
+          t.report(function, INCORRECT_ANNOTATION_ON_GETTER_SETTER);
+        }
       }
     }
   }
@@ -208,6 +233,7 @@ public final class CheckJSDocStyle extends AbstractPostOrderCallback implements 
           || jsDoc.hasReturnType()) {
         checkParams(t, function, jsDoc);
       }
+      checkNoTypeOnGettersAndSetters(t, function, jsDoc);
       checkReturn(t, function, jsDoc);
     }
   }
@@ -302,7 +328,7 @@ public final class CheckJSDocStyle extends AbstractPostOrderCallback implements 
       checkInlineParams(t, function);
     } else {
       Node paramList = NodeUtil.getFunctionParameters(function);
-      if (paramsFromJsDoc.size() != paramList.getChildCount()) {
+      if (!paramList.hasXChildren(paramsFromJsDoc.size())) {
         t.report(paramList, WRONG_NUMBER_OF_PARAMS);
         return;
       }
@@ -329,7 +355,8 @@ public final class CheckJSDocStyle extends AbstractPostOrderCallback implements 
     Node paramList = NodeUtil.getFunctionParameters(function);
 
     for (Node param : paramList.children()) {
-      JSDocInfo jsDoc = param.getJSDocInfo();
+      JSDocInfo jsDoc =
+          param.isDefaultValue() ? param.getFirstChild().getJSDocInfo() : param.getJSDocInfo();
       if (jsDoc == null) {
         t.report(param, MISSING_PARAMETER_JSDOC);
         return;
@@ -378,13 +405,24 @@ public final class CheckJSDocStyle extends AbstractPostOrderCallback implements 
     return false;
   }
 
+  private static boolean isDefaultAssignedParamWithInlineJsDoc(Node param) {
+    if (param.isDefaultValue()) {
+      if (param.hasChildren() && param.getFirstChild().isName()) {
+        if (param.getFirstChild().getJSDocInfo() != null) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   private boolean hasAnyInlineJsDoc(Node function) {
     if (function.getFirstChild().getJSDocInfo() != null) {
       // Inline return annotation.
       return true;
     }
     for (Node param : NodeUtil.getFunctionParameters(function).children()) {
-      if (param.getJSDocInfo() != null) {
+      if (param.getJSDocInfo() != null || isDefaultAssignedParamWithInlineJsDoc(param)) {
         return true;
       }
     }

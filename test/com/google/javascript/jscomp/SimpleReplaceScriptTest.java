@@ -18,6 +18,7 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.javascript.jscomp.CompilerTestCase.lines;
 import static com.google.javascript.rhino.testing.NodeSubject.assertNode;
 
 import com.google.common.collect.ImmutableList;
@@ -40,9 +41,7 @@ import org.junit.runners.JUnit4;
 /**
  * Various tests for {@code replaceScript} functionality of Closure Compiler.
  *
- * @author bashir@google.com (Bashir Sadjad)
  */
-
 @RunWith(JUnit4.class)
 public final class SimpleReplaceScriptTest extends BaseReplaceScriptTestCase {
   @Test
@@ -308,36 +307,6 @@ public final class SimpleReplaceScriptTest extends BaseReplaceScriptTestCase {
   public void testClassInstantiation() {
     CompilerOptions options = getOptions(DiagnosticGroups.CHECK_TYPES);
     checkProvideRequireErrors(options);
-  }
-
-  @Test
-  public void testCheckRequires() {
-    CompilerOptions options = getOptions();
-    options.setWarningLevel(DiagnosticGroups.MISSING_REQUIRE, CheckLevel.ERROR);
-    // Note it needs declaration of ns to throw the error because closurePass
-    // which replaces goog.provide happens afterwards (see checkRequires pass).
-    String source0 = "var ns = {};\n goog.provide('ns.Bar');\n"
-        + "/** @constructor */ ns.Bar = function() {};";
-    String source1 = "var a = new ns.Bar();";
-    Result result =
-        runReplaceScript(options, ImmutableList.of(source0, source1), 1, 0, source1, 1, true)
-            .getResult();
-    // TODO(joeltine): Change back to asserting an error when b/28869281
-    // is fixed.
-    assertThat(result.success).isTrue();
-  }
-
-  @Test
-  public void testCheckRequiresWithNewVar() {
-    CompilerOptions options = getOptions();
-    options.setWarningLevel(DiagnosticGroups.MISSING_REQUIRE, CheckLevel.ERROR);
-    String src = "";
-    String modifiedSrc = src + "\n(function() { var a = new ns.Bar(); })();";
-    Result result = runReplaceScript(options,
-        ImmutableList.of(src), 0, 0, modifiedSrc, 0, false).getResult();
-    // TODO(joeltine): Change back to asserting an error when b/28869281
-    // is fixed.
-    assertThat(result.success).isTrue();
   }
 
   @Test
@@ -793,7 +762,7 @@ public final class SimpleReplaceScriptTest extends BaseReplaceScriptTestCase {
     type = compiler.getTypeRegistry().getGlobalType("ns.Foo");
     fnType = type.toObjectType().getConstructor();
     StaticTypedSlot newSlot = fnType.getSlot("prototype");
-    assertThat(newSlot).isNotSameAs(originalSlot);
+    assertThat(newSlot).isNotSameInstanceAs(originalSlot);
   }
 
   /** This test will fail if global scope generation happens before closure-pass. */
@@ -802,10 +771,13 @@ public final class SimpleReplaceScriptTest extends BaseReplaceScriptTestCase {
     CompilerOptions options = getOptions();
     options.setCheckSymbols(true);
     String src =
-        "goog.provide('namespace.Bar');\n"
-        + "/** @constructor */ namespace.Bar = function() {};";
-    Result result = runReplaceScript(options,
-        ImmutableList.of(src), 0, 0, src, 0, false).getResult();
+        lines(
+            "/** @const */",
+            "var goog = {};",
+            "goog.provide('namespace.Bar');",
+            "/** @constructor */ namespace.Bar = function() {};");
+    Result result =
+        runReplaceScript(options, ImmutableList.of(src), 0, 0, src, 0, false).getResult();
     assertNoWarningsOrErrors(result);
   }
 

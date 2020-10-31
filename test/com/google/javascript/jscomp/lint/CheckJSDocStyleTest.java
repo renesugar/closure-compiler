@@ -17,6 +17,7 @@ package com.google.javascript.jscomp.lint;
 
 import static com.google.javascript.jscomp.lint.CheckJSDocStyle.CLASS_DISALLOWED_JSDOC;
 import static com.google.javascript.jscomp.lint.CheckJSDocStyle.EXTERNS_FILES_SHOULD_BE_ANNOTATED;
+import static com.google.javascript.jscomp.lint.CheckJSDocStyle.INCORRECT_ANNOTATION_ON_GETTER_SETTER;
 import static com.google.javascript.jscomp.lint.CheckJSDocStyle.INCORRECT_PARAM_NAME;
 import static com.google.javascript.jscomp.lint.CheckJSDocStyle.MISSING_JSDOC;
 import static com.google.javascript.jscomp.lint.CheckJSDocStyle.MISSING_PARAMETER_JSDOC;
@@ -66,8 +67,8 @@ public final class CheckJSDocStyleTest extends CompilerTestCase {
   }
 
   @Override
-  protected CompilerOptions getOptions(CompilerOptions options) {
-    super.getOptions(options);
+  protected CompilerOptions getOptions() {
+    CompilerOptions options = super.getOptions();
     options.setParseJsDocDocumentation(Config.JsDocParsing.INCLUDE_DESCRIPTIONS_NO_WHITESPACE);
     options.setWarningLevel(CheckJSDocStyle.ALL_DIAGNOSTICS, CheckLevel.WARNING);
     return options;
@@ -200,6 +201,17 @@ public final class CheckJSDocStyleTest extends CompilerTestCase {
 
     testSame("class Foo { /** @return {number} */ get twentyone() { return 21; } }");
     testSame("class Foo { /** @param {string} s */ set someString(s) { this.someString_ = s; } }");
+  }
+
+  @Test
+  public void testTypeAnnotationOnGetterSetter() {
+    testWarning(
+        "class Foo { /** @type {number} */ get twentyone() { return 21; } }",
+        INCORRECT_ANNOTATION_ON_GETTER_SETTER);
+    testWarning(
+        "class Foo { /** @type {string} s */ set someString(s) { this.someString_ = s; } }",
+        INCORRECT_ANNOTATION_ON_GETTER_SETTER);
+    testNoWarning("class Foo { set someString( /** string */ s) { this.someString_ = s; } }");
   }
 
   @Test
@@ -617,6 +629,63 @@ public final class CheckJSDocStyleTest extends CompilerTestCase {
   }
 
   @Test
+  public void testMissingParam_defaultValue() {
+    testWarning(
+        lines(
+            "/**",
+            " * @param {string} x",
+            // No @param for y.
+            " */",
+            "function f(x, y = 0) {}"),
+        WRONG_NUMBER_OF_PARAMS);
+
+    testWarning(
+        lines(
+            "/**",
+            " * @param {string} x",
+            " * @param {number} y",
+            " */",
+            "function f(x, y = 0) {}"),
+        OPTIONAL_PARAM_NOT_MARKED_OPTIONAL);
+
+    testNoWarning(
+        lines(
+            "/**",
+            " * @param {string} x",
+            " * @param {number=} y",
+            " */",
+            "function f(x, y = 0) {}"));
+
+    testWarning("function f(/** string */ x, y = 0) {}", MISSING_PARAMETER_JSDOC);
+    testWarning(
+        "function f(/** string */ x, /** number */ y = 0) {}", OPTIONAL_PARAM_NOT_MARKED_OPTIONAL);
+    testNoWarning("function f(/** string */ x, /** number= */ y = 0) {}");
+  }
+
+  @Test
+  public void testMissingParam_rest() {
+    testWarning(
+        lines(
+            "/**",
+            " * @param {string} x",
+            // No @param for y.
+            " */",
+            "function f(x, ...y) {}"),
+        WRONG_NUMBER_OF_PARAMS);
+
+    testNoWarning(
+        lines(
+            "/**",
+            " * @param {string} x",
+            " * @param {...number} y",
+            " */",
+            "function f(x, ...y) {}"));
+
+    testWarning("function f(/** string */ x, ...y) {}", MISSING_PARAMETER_JSDOC);
+    testNoWarning("function f(/** string */ x, /** ...number */ ...y) {}");
+  }
+
+  @Test
   public void testInvalidMissingParamWithDestructuringPattern_withES6Modules01() {
     testWarning(
         lines(
@@ -843,6 +912,46 @@ public final class CheckJSDocStyleTest extends CompilerTestCase {
             "  set foo(val) { }",
             "}"),
         MUST_HAVE_TRAILING_UNDERSCORE);
+  }
+
+  @Test
+  public void testNoPrivateWarningsWithSuppressions() {
+    testNoWarning(
+        lines(
+            "goog.module('mod');",
+            "class Foo {",
+            "  constructor() {",
+            "    /** @private {number} */",
+            "    this.n_;",
+            "    /** @private {number} */",
+            "    this.m_;",
+            "  }",
+            "  setUp() {",
+            "    /** @suppress {checkTypes} */",
+            "    this.n_ = ' not a number ';",
+            "    this.m_ = 1;",
+            "  }",
+            "  testSomething() {",
+            "    alert(this.n_ + this.m_);",
+            "  }",
+            "}"));
+  }
+
+  @Test
+  public void testPrivateWarningAtPropertyDeclaration() {
+    testWarning(
+        lines(
+            "class Foo {",
+            "/** @constructor */",
+            "  constructor(foo) {",
+            "   /**",
+            "   * @const {number}",
+            "   * @suppress {missingProperties} suppress a warning for `bar` access on `foo`.",
+            "   */",
+            "   this.n_ = foo.bar;",
+            "  }",
+            "}"),
+        MUST_BE_PRIVATE);
   }
 
   @Test

@@ -29,7 +29,6 @@ import com.google.javascript.rhino.jstype.TernaryValue;
 /**
  * Use {@link ControlFlowGraph} and {@link GraphReachability} to inform user
  * about unreachable code.
- *
  */
 class CheckUnreachableCode extends AbstractPreOrderCallback implements ScopedCallback {
 
@@ -96,7 +95,7 @@ class CheckUnreachableCode extends AbstractPreOrderCallback implements ScopedCal
           // TODO(user): Handle more complicated expression like true == true,
           // etc....
           if (condition != null) {
-            TernaryValue val = NodeUtil.getImpureBooleanValue(condition);
+            TernaryValue val = NodeUtil.getBooleanValue(condition);
             if (val != TernaryValue.UNKNOWN) {
               return val.toBoolean(true) == (branch == Branch.ON_TRUE);
             }

@@ -16,20 +16,60 @@
 
 package com.google.javascript.jscomp;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
 import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.deps.ModuleLoader;
-import com.google.javascript.jscomp.deps.ModuleLoader.ResolutionMode;
+import com.google.javascript.jscomp.type.ReverseAbstractInterpreter;
+import com.google.javascript.jscomp.type.SemanticReverseAbstractInterpreter;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/** Unit tests for {@link Es6RewriteModules} */
-
+/**
+ * Unit tests for {@link Es6RewriteModules}
+ *
+ * <p>See also Es6RewriteModulesBeforeTypeCheckingTest. This file tests only behavior when run after
+ * type checking.
+ *
+ * <p>TODO(b/144059297): Make Es6RewriteModules preserve type information. See TODOs in test cases
+ * below & remove calls to {@code enableRunTypeCheckAfterProcessing()} in them.
+ *
+ * <p>TODO(b/144593112): Remove the other test class when the pass is permanently moved after type
+ * checking.
+ */
 @RunWith(JUnit4.class)
 public final class Es6RewriteModulesTest extends CompilerTestCase {
   private ImmutableList<String> moduleRoots = null;
+
+  private static final SourceFile other =
+      SourceFile.fromCode(
+          "other.js",
+          lines(
+              "export default 0;", //
+              "export let name, x, a, b, c;",
+              "export {x as class};",
+              "export class Parent {}"));
+
+  private static final SourceFile otherExpected =
+      SourceFile.fromCode(
+          "other.js",
+          lines(
+              "var $jscompDefaultExport$$module$other = 0;", //
+              "let name$$module$other, x$$module$other, a$$module$other, b$$module$other, ",
+              "  c$$module$other;",
+              "class Parent$$module$other {}",
+              "/** @const */ var module$other = {};",
+              "/** @const */ module$other.Parent = Parent$$module$other;",
+              "/** @const */ module$other.a = a$$module$other;",
+              "/** @const */ module$other.b = b$$module$other;",
+              "/** @const */ module$other.c = c$$module$other;",
+              "/** @const */ module$other.class = x$$module$other;",
+              "/** @const */ module$other.default = $jscompDefaultExport$$module$other;",
+              "/** @const */ module$other.name = name$$module$other;",
+              "/** @const */ module$other.x = x$$module$other;"));
 
   @Override
   @Before
@@ -37,7 +77,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
     super.setUp();
     // ECMASCRIPT5 to trigger module processing after parsing.
     setLanguage(LanguageMode.ECMASCRIPT_2015, LanguageMode.ECMASCRIPT5);
-    enableRunTypeCheckAfterProcessing();
+    enableCreateModuleMap();
+    enableTypeInfoValidation();
     disableScriptFeatureValidation();
   }
 
@@ -47,6 +88,7 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
     // ECMASCRIPT5 to Trigger module processing after parsing.
     options.setLanguageOut(LanguageMode.ECMASCRIPT5);
     options.setWarningLevel(DiagnosticGroups.LINT_CHECKS, CheckLevel.ERROR);
+    options.setPrettyPrint(true);
 
     if (moduleRoots != null) {
       options.setModuleRoots(moduleRoots);
@@ -58,70 +100,142 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
   @Override
   protected CompilerPass getProcessor(Compiler compiler) {
     return (externs, root) -> {
-      new GatherModuleMetadata(
-              compiler, /* processCommonJsModules= */ false, ResolutionMode.BROWSER)
-          .process(externs, root);
+      ReverseAbstractInterpreter rai =
+          new SemanticReverseAbstractInterpreter(compiler.getTypeRegistry());
+      compiler.setTypeCheckingHasRun(true);
+      TypedScope globalTypedScope =
+          checkNotNull(
+              new TypeCheck(compiler, rai, compiler.getTypeRegistry())
+                  .processForTesting(externs, root));
       new Es6RewriteModules(
-              compiler, compiler.getModuleMetadataMap(), /* preprocessorSymbolTable= */ null)
+              compiler,
+              compiler.getModuleMetadataMap(),
+              compiler.getModuleMap(),
+              /* preprocessorSymbolTable= */ null,
+              globalTypedScope)
           .process(externs, root);
     };
   }
 
-  @Override
-  protected int getNumRepetitions() {
-    return 1;
-  }
-
   void testModules(String input, String expected) {
-    ModulesTestUtils.testModules(this, "testcode.js", input, expected);
+    test(
+        srcs(other, SourceFile.fromCode("testcode", input)),
+        expected(otherExpected, SourceFile.fromCode("testcode", expected)));
   }
 
   @Test
   public void testImport() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
-        "import name from './other.js';\n use(name);",
-        "use(module$other.default); /** @const */ var module$testcode = {};");
+        lines(
+            "import name from './other.js';", //
+            "use(name);"),
+        "use($jscompDefaultExport$$module$other); /** @const */ var module$testcode = {};");
+
+    testModules("import {a as name} from './other.js';", "/** @const */ var module$testcode = {};");
 
     testModules(
-        "import {n as name} from './other.js';", "/** @const */ var module$testcode = {};");
+        lines(
+            "import x, {a as foo, b as bar} from './other.js';", //
+            "use(x);"),
+        "use($jscompDefaultExport$$module$other); /** @const */ var module$testcode = {};");
 
     testModules(
-        "import x, {f as foo, b as bar} from './other.js';\n use(x);",
-        "use(module$other.default); /** @const */ var module$testcode = {};");
+        lines(
+            "import {default as name} from './other.js';", //
+            "use(name);"),
+        "use($jscompDefaultExport$$module$other); /** @const */ var module$testcode = {};");
 
     testModules(
-        "import {default as name} from './other.js';\n use(name);",
-        "use(module$other.default); /** @const */ var module$testcode = {};");
-
-    testModules(
-        "import {class as name} from './other.js';\n use(name);",
-        "use(module$other.class); /** @const */ var module$testcode = {};");
+        lines(
+            "import {class as name} from './other.js';", //
+            "use(name);"),
+        "use(x$$module$other); /** @const */ var module$testcode = {};");
   }
 
   @Test
   public void testImport_missing() {
-    ModulesTestUtils.testModulesError(this, "import name from './does_not_exist';\n use(name);",
-        ModuleLoader.LOAD_WARNING);
-  }
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
+    ModulesTestUtils.testModulesError(
+        this, "import name from './does_not_exist';\n use(name);", ModuleLoader.LOAD_WARNING);
 
-  @Test
-  public void testImportStar() {
-    testModules(
-        "import * as name from './other.js';\n use(name.foo);",
-        "use(module$other.foo); /** @const */ var module$testcode = {};");
-  }
+    ignoreWarnings(ModuleLoader.LOAD_WARNING);
 
-  @Test
-  public void testTypeNodeRewriting() {
+    // These are different as a side effect of the way that the fake bindings are made. The first
+    // makes a binding for a fake variable in the fake module. The second creates a fake binding
+    // for the fake module. When "dne.name" is resolved, the module does not have key "name", so
+    // it chooses to rewrite to "module$does_not_exist.name", thinking that this could've been a
+    // reference to an export that doesn't exist.
     testModules(
-        "import * as name from './other.js';\n /** @type {name.foo} */ var x;",
         lines(
-            "/** @type {module$other.foo} */ var x$$module$testcode;",
+            "import {name} from './does_not_exist';", //
+            "use(name);"),
+        lines(
+            "use(name$$module$does_not_exist);", //
+            "/** @const */ var module$testcode = {};"));
+
+    testModules(
+        lines(
+            "import * as dne from './does_not_exist';", //
+            "use(dne.name);"),
+        lines(
+            "use(module$does_not_exist.name);", //
             "/** @const */ var module$testcode = {};"));
   }
 
   @Test
+  public void testImportStar() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
+    testModules(
+        lines(
+            "import * as name from './other.js';", //
+            "use(name.a);"),
+        "use(a$$module$other); /** @const */ var module$testcode = {};");
+  }
+
+  @Test
+  public void testTypeNodeRewriting() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
+    test(
+        srcs(
+            SourceFile.fromCode(
+                "other.js",
+                lines(
+                    "export default 0;", //
+                    "export let name = 'George';",
+                    "export let a = class {};")),
+            SourceFile.fromCode(
+                "testcode",
+                lines(
+                    "import * as name from './other.js';", //
+                    "/** @type {name.a} */ var x;"))),
+        expected(
+            SourceFile.fromCode(
+                "other.js",
+                lines(
+                    "var $jscompDefaultExport$$module$other = 0;", //
+                    "let name$$module$other = 'George';",
+                    "let a$$module$other = class {};",
+                    "/** @const */ var module$other = {};",
+                    "/** @const */ module$other.a = a$$module$other;",
+                    "/** @const */ module$other.default = $jscompDefaultExport$$module$other;",
+                    "/** @const */ module$other.name = name$$module$other;",
+                    "")),
+            SourceFile.fromCode(
+                "testcode",
+                lines(
+                    "/** @type {a$$module$other} */ var x$$module$testcode;",
+                    "/** @const */ var module$testcode = {};"))));
+  }
+
+  @Test
   public void testExport() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         "export var a = 1, b = 2;",
         lines(
@@ -167,8 +281,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "var f$$module$testcode = 1;",
             "var b$$module$testcode = 2;",
             "/** @const */ var module$testcode = {};",
-            "/** @const */ module$testcode.foo = f$$module$testcode;",
-            "/** @const */ module$testcode.bar = b$$module$testcode;"));
+            "/** @const */ module$testcode.bar = b$$module$testcode;",
+            "/** @const */ module$testcode.foo = f$$module$testcode;"));
 
     testModules(
         "var f = 1;\nexport {f as default};",
@@ -187,6 +301,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
 
   @Test
   public void testModulesInExterns() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testError(
         ImmutableList.of(
             SourceFile.fromCode(
@@ -200,6 +316,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
 
   @Test
   public void testModulesInTypeSummary() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     allowExternsChanges();
     test(
         // Inputs
@@ -221,16 +339,18 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             SourceFile.fromCode(
                 "mod2.js",
                 lines(
-                    "alert(module$mod1.externalName);",
+                    "alert(externalName$$module$mod1);",
                     "/** @const */ var module$mod2 = {};",
                     ""))));
   }
 
   @Test
   public void testMutableExport() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         lines(
-            "export var a = 1, b = 2;",
+            "export var a = 1, b = 2;", //
             "function f() {",
             "  a++;",
             "  b++",
@@ -242,8 +362,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "  b$$module$testcode++",
             "}",
             "/** @const */ var module$testcode = {",
-            "  /** @return {?} */ get a() { return a$$module$testcode; },",
-            "  /** @return {?} */ get b() { return b$$module$testcode; },",
+            "  get a() { return a$$module$testcode; },",
+            "  get b() { return b$$module$testcode; },",
             "};"));
 
     testModules(
@@ -260,12 +380,13 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "  b$$module$testcode++",
             "};",
             "/** @const */ var module$testcode = {",
-            "  /** @return {?} */ get A() { return a$$module$testcode; },",
-            "  /** @return {?} */ get B() { return b$$module$testcode; },",
+            "  get A() { return a$$module$testcode; },",
+            "  get B() { return b$$module$testcode; },",
             "};"));
 
     testModules(
-        lines("export function f() {};",
+        lines(
+            "export function f() {};", //
             "function g() {",
             "  f = function() {};",
             "}"),
@@ -275,11 +396,12 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "  f$$module$testcode = function() {};",
             "}",
             "/** @const */ var module$testcode = {",
-            "  /** @return {?} */ get f() { return f$$module$testcode; },",
+            "  get f() { return f$$module$testcode; },",
             "};"));
 
     testModules(
-        lines("export default function f() {};",
+        lines(
+            "export default function f() {};", //
             "function g() {",
             "  f = function() {};",
             "}"),
@@ -289,11 +411,12 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "  f$$module$testcode = function() {};",
             "}",
             "/** @const */ var module$testcode = {",
-            "  /** @return {?} */ get default() { return f$$module$testcode; },",
+            "  get default() { return f$$module$testcode; },",
             "};"));
 
     testModules(
-        lines("export class C {};",
+        lines(
+            "export class C {};", //
             "function g() {",
             "  C = class {};",
             "}"),
@@ -303,11 +426,12 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "  C$$module$testcode = class {};",
             "}",
             "/** @const */ var module$testcode = {",
-            "  /** @return {?} */ get C() { return C$$module$testcode; },",
+            "  get C() { return C$$module$testcode; },",
             "};"));
 
     testModules(
-        lines("export default class C {};",
+        lines(
+            "export default class C {};", //
             "function g() {",
             "  C = class {};",
             "}"),
@@ -317,11 +441,12 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "  C$$module$testcode = class {};",
             "}",
             "/** @const */ var module$testcode = {",
-            "  /** @return {?} */ get default() { return C$$module$testcode; },",
+            "  get default() { return C$$module$testcode; },",
             "};"));
 
     testModules(
-        lines("export var IN, OF;",
+        lines(
+            "export var IN, OF;", //
             "function f() {",
             "  for (IN in {});",
             "  for (OF of []);",
@@ -333,33 +458,36 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "  for (OF$$module$testcode of []);",
             "}",
             "/** @const */ var module$testcode = {",
-            "  /** @return {?} */ get IN() { return IN$$module$testcode; },",
-            "  /** @return {?} */ get OF() { return OF$$module$testcode; },",
+            "  get IN() { return IN$$module$testcode; },",
+            "  get OF() { return OF$$module$testcode; },",
             "};"));
 
     testModules(
-        lines("export var ARRAY, OBJ, UNCHANGED;",
+        lines(
+            "export var ARRAY, OBJ, UNCHANGED;",
             "function f() {",
-            "  ({OBJ} = {});",
+            "  ({OBJ} = {OBJ: {}});",
             "  [ARRAY] = [];",
             "  var x = {UNCHANGED: 0};",
             "}"),
         lines(
             "var ARRAY$$module$testcode, OBJ$$module$testcode, UNCHANGED$$module$testcode;",
             "function f$$module$testcode() {",
-            "  ({OBJ:OBJ$$module$testcode} = {});",
+            "  ({OBJ:OBJ$$module$testcode} = {OBJ: {}});",
             "  [ARRAY$$module$testcode] = [];",
             "  var x = {UNCHANGED: 0};",
             "}",
             "/** @const */ var module$testcode = {",
-            "  /** @return {?} */ get ARRAY() { return ARRAY$$module$testcode; },",
-            "  /** @return {?} */ get OBJ() { return OBJ$$module$testcode; },",
+            "  get ARRAY() { return ARRAY$$module$testcode; },",
+            "  get OBJ() { return OBJ$$module$testcode; },",
             "};",
             "/** @const */ module$testcode.UNCHANGED = UNCHANGED$$module$testcode"));
   }
 
   @Test
   public void testConstClassExportIsConstant() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         "export const Class = class {}",
         lines(
@@ -370,8 +498,11 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
 
   @Test
   public void testTopLevelMutationIsNotMutable() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
-        lines("export var a = 1, b = 2;",
+        lines(
+            "export var a = 1, b = 2;", //
             "a++;",
             "b++"),
         lines(
@@ -383,7 +514,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "/** @const */ module$testcode.b = b$$module$testcode;"));
 
     testModules(
-        lines("var a = 1, b = 2; export {a as A, b as B};",
+        lines(
+            "var a = 1, b = 2; export {a as A, b as B};", //
             "if (change) {",
             "  a++;",
             "  b++",
@@ -399,7 +531,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "/** @const */ module$testcode.B = b$$module$testcode;"));
 
     testModules(
-        lines("export function f() {};",
+        lines(
+            "export function f() {};", //
             "if (change) {",
             "  f = function() {};",
             "}"),
@@ -412,7 +545,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "/** @const */ module$testcode.f = f$$module$testcode;"));
 
     testModules(
-        lines("export default function f() {};",
+        lines(
+            "export default function f() {};",
             "try { f = function() {}; } catch (e) { f = function() {}; }"),
         lines(
             "function f$$module$testcode() {}",
@@ -422,7 +556,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "/** @const */ module$testcode.default = f$$module$testcode;"));
 
     testModules(
-        lines("export class C {};",
+        lines(
+            "export class C {};", //
             "if (change) {",
             "  C = class {};",
             "}"),
@@ -435,7 +570,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "/** @const */ module$testcode.C = C$$module$testcode;"));
 
     testModules(
-        lines("export default class C {};",
+        lines(
+            "export default class C {};", //
             "{",
             "  C = class {};",
             "}"),
@@ -450,6 +586,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
 
   @Test
   public void testExportWithJsDoc() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         "/** @constructor */\nexport function F() { return '';}",
         lines(
@@ -485,62 +623,90 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
 
   @Test
   public void testImportAndExport() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
-        lines("import {name as n} from './other.js';", "use(n);", "export {n as name};"),
         lines(
-            "use(module$other.name);",
-            "/** @const */ var module$testcode = {",
-            "  /** @return {?} */ get name() { return module$other.name; },",
-            "};"));
+            "import {name as n} from './other.js';", //
+            "use(n);",
+            "export {n as name};"),
+        lines(
+            "use(name$$module$other);",
+            "/** @const */ var module$testcode = {};",
+            "/** @const */ module$testcode.name = name$$module$other;"));
   }
 
   @Test
   public void testExportFrom() {
-    testModules(
-        lines(
-            "export {name} from './other.js';",
-            "export {default} from './other.js';",
-            "export {class} from './other.js';"),
-        lines(
-            "/** @const */ var module$testcode = {",
-            "  /** @return {?} */ get name() { return module$other.name; },",
-            "  /** @return {?} */ get default() { return module$other.default; },",
-            "  /** @return {?} */ get class() { return module$other.class; },",
-            "};"));
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
+    test(
+        srcs(
+            other,
+            SourceFile.fromCode(
+                "testcode",
+                lines(
+                    "export {name} from './other.js';",
+                    "export {default} from './other.js';",
+                    "export {class} from './other.js';"))),
+        expected(
+            otherExpected,
+            SourceFile.fromCode(
+                "testcode",
+                lines(
+                    "/** @const */ var module$testcode = {};",
+                    "/** @const */ module$testcode.class = x$$module$other;",
+                    "/** @const */ module$testcode.default = $jscompDefaultExport$$module$other;",
+                    "/** @const */ module$testcode.name = name$$module$other;"))));
 
-    testModules(
-        "export {a, b as c, d} from './other.js';",
-        lines(
-            "/** @const */ var module$testcode = {",
-            "  /** @return {?} */ get a() { return module$other.a; },",
-            "  /** @return {?} */ get c() { return module$other.b; },",
-            "  /** @return {?} */ get d() { return module$other.d; },",
-            "};"));
+    test(
+        srcs(other, SourceFile.fromCode("testcode", "export {a, b as c, x} from './other.js';")),
+        expected(
+            otherExpected,
+            SourceFile.fromCode(
+                "testcode",
+                lines(
+                    "/** @const */ var module$testcode = {}",
+                    "/** @const */ module$testcode.a = a$$module$other;",
+                    "/** @const */ module$testcode.c = b$$module$other;",
+                    "/** @const */ module$testcode.x = x$$module$other;"))));
 
-    testModules(
-        "export {a as b, b as a} from './other.js';",
-        lines(
-            "/** @const */ var module$testcode = {",
-            "  /** @return {?} */ get b() { return module$other.a; },",
-            "  /** @return {?} */ get a() { return module$other.b; },",
-            "};"));
+    test(
+        srcs(other, SourceFile.fromCode("testcode", "export {a as b, b as a} from './other.js';")),
+        expected(
+            otherExpected,
+            SourceFile.fromCode(
+                "testcode",
+                lines(
+                    "/** @const */ var module$testcode = {}",
+                    "/** @const */ module$testcode.a = b$$module$other;",
+                    "/** @const */ module$testcode.b = a$$module$other;"))));
 
-    testModules(
-        lines(
-            "export {default as a} from './other.js';",
-            "export {a as a2, default as b} from './other.js';",
-            "export {class as switch} from './other.js';"),
-        lines(
-            "/** @const */ var module$testcode = {",
-            "  /** @return {?} */ get a() { return module$other.default; },",
-            "  /** @return {?} */ get a2() { return module$other.a; },",
-            "  /** @return {?} */ get b() { return module$other.default; },",
-            "  /** @return {?} */ get switch() { return module$other.class; },",
-            "};"));
+    test(
+        srcs(
+            other,
+            SourceFile.fromCode(
+                "testcode",
+                lines(
+                    "export {default as a} from './other.js';",
+                    "export {a as a2, default as b} from './other.js';",
+                    "export {class as switch} from './other.js';"))),
+        expected(
+            otherExpected,
+            SourceFile.fromCode(
+                "testcode",
+                lines(
+                    "/** @const */ var module$testcode = {}",
+                    "/** @const */ module$testcode.a = $jscompDefaultExport$$module$other;",
+                    "/** @const */ module$testcode.a2 = a$$module$other;",
+                    "/** @const */ module$testcode.b = $jscompDefaultExport$$module$other;",
+                    "/** @const */ module$testcode.switch = x$$module$other;"))));
   }
 
   @Test
   public void testExportDefault() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         "export default 'someString';",
         lines(
@@ -575,6 +741,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
 
   @Test
   public void testExportDefault_anonymous() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         "export default class {};",
         lines(
@@ -592,6 +760,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
 
   @Test
   public void testExportDestructureDeclaration() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         "export let {a, c:b} = obj;",
         lines(
@@ -620,6 +790,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
 
   @Test
   public void testExtendImportedClass() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         lines(
             "import {Parent} from './other.js';",
@@ -628,8 +800,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "  useParent(parent) {}",
             "}"),
         lines(
-            "class Child$$module$testcode extends module$other.Parent {",
-            "  /** @param {module$other.Parent} parent */",
+            "class Child$$module$testcode extends Parent$$module$other {",
+            "  /** @param {Parent$$module$other} parent */",
             "  useParent(parent) {}",
             "}",
             "/** @const */ var module$testcode = {};"));
@@ -642,8 +814,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "  useParent(parent) {}",
             "}"),
         lines(
-            "class Child$$module$testcode extends module$other.Parent {",
-            "  /** @param {module$other.Parent} parent */",
+            "class Child$$module$testcode extends Parent$$module$other {",
+            "  /** @param {Parent$$module$other} parent */",
             "  useParent(parent) {}",
             "}",
             "/** @const */ var module$testcode = {};",
@@ -652,9 +824,14 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
 
   @Test
   public void testFixTypeNode() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         lines(
-            "export class Child {", "  /** @param {Child} child */", "  useChild(child) {}", "}"),
+            "export class Child {", //
+            "  /** @param {Child} child */",
+            "  useChild(child) {}",
+            "}"),
         lines(
             "class Child$$module$testcode {",
             "  /** @param {Child$$module$testcode} child */",
@@ -668,21 +845,35 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             "export class Child {",
             "  /** @param {Child.Foo.Bar.Baz} baz */",
             "  useBaz(baz) {}",
-            "}"),
+            "}",
+            "",
+            "Child.Foo = class {};",
+            "",
+            "Child.Foo.Bar = class {};",
+            "",
+            "Child.Foo.Bar.Baz = class {};",
+            ""),
         lines(
             "class Child$$module$testcode {",
             "  /** @param {Child$$module$testcode.Foo.Bar.Baz} baz */",
             "  useBaz(baz) {}",
             "}",
+            "Child$$module$testcode.Foo=class{};",
+            "Child$$module$testcode.Foo.Bar=class{};",
+            "Child$$module$testcode.Foo.Bar.Baz=class{};",
             "/** @const */ var module$testcode = {};",
             "/** @const */ module$testcode.Child = Child$$module$testcode;"));
   }
 
   @Test
   public void testRenameTypedef() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         lines(
-            "import './other.js';", "/** @typedef {string|!Object} */", "export var UnionType;"),
+            "import './other.js';", //
+            "/** @typedef {string|!Object} */",
+            "export var UnionType;"),
         lines(
             "/** @typedef {string|!Object} */",
             "var UnionType$$module$testcode;",
@@ -693,6 +884,8 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
 
   @Test
   public void testNoInnerChange() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         lines(
             "var Foo = (function () {",
@@ -713,27 +906,29 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
 
   @Test
   public void testRenameImportedReference() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         lines(
-            "import {f} from './other.js';",
+            "import {a} from './other.js';",
             "import {b as bar} from './other.js';",
-            "f();",
+            "a();",
             "function g() {",
-            "  f();",
+            "  a();",
             "  bar++;",
             "  function h() {",
-            "    var f = 3;",
-            "    { let f = 4; }",
+            "    var a = 3;",
+            "    { let a = 4; }",
             "  }",
             "}"),
         lines(
-            "module$other.f();",
+            "a$$module$other();",
             "function g$$module$testcode() {",
-            "  module$other.f();",
-            "  module$other.b++;",
+            "  a$$module$other();",
+            "  b$$module$other++;",
             "  function h() {",
-            "    var f = 3;",
-            "    { let f = 4; }",
+            "    var a = 3;",
+            "    { let a = 4; }",
             "  }",
             "}",
             "/** @const */ var module$testcode = {};"));
@@ -741,65 +936,77 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
 
   @Test
   public void testObjectDestructuringAndObjLitShorthand() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         lines(
-            "import {f} from './other.js';",
+            "import {c} from './other.js';",
             "const foo = 1;",
-            "const {a, b} = f({foo});",
+            "const {a, b} = c({foo});",
             "use(a, b);"),
         lines(
             "const foo$$module$testcode = 1;",
             "const {",
             "  a: a$$module$testcode,",
             "  b: b$$module$testcode,",
-            "} = module$other.f({foo: foo$$module$testcode});",
+            "} = c$$module$other({foo: foo$$module$testcode});",
             "use(a$$module$testcode, b$$module$testcode);",
             "/** @const */ var module$testcode = {};"));
   }
 
   @Test
   public void testObjectDestructuringAndObjLitShorthandWithDefaultValue() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
         lines(
-            "import {f} from './other.js';",
+            "import {c} from './other.js';",
             "const foo = 1;",
-            "const {a = 'A', b = 'B'} = f({foo});",
+            "const {a = 'A', b = 'B'} = c({foo});",
             "use(a, b);"),
         lines(
             "const foo$$module$testcode = 1;",
             "const {",
             "  a: a$$module$testcode = 'A',",
             "  b: b$$module$testcode = 'B',",
-            "} = module$other.f({foo: foo$$module$testcode});",
+            "} = c$$module$other({foo: foo$$module$testcode});",
             "use(a$$module$testcode, b$$module$testcode);",
             "/** @const */ var module$testcode = {};"));
   }
 
   @Test
   public void testImportWithoutReferences() {
-    testModules("import './other.js';", "/** @const */ var module$testcode = {};");
-    // GitHub issue #1819: https://github.com/google/closure-compiler/issues/1819
-    // Need to make sure the order of the goog.requires matches the order of the imports.
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
-        "import './other.js';\nimport './yet_another.js';",
+        "import './other.js';", //
         "/** @const */ var module$testcode = {};");
   }
 
   @Test
   public void testUselessUseStrict() {
-    ModulesTestUtils.testModulesError(this, "'use strict';\nexport default undefined;",
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
+    ModulesTestUtils.testModulesError(
+        this,
+        lines(
+            "'use strict';", //
+            "export default undefined;"),
         ClosureRewriteModule.USELESS_USE_STRICT_DIRECTIVE);
   }
 
   @Test
   public void testUseStrict_noWarning() {
-    testSame(lines(
-        "'use strict';",
-        "var x;"));
+    testSame(
+        lines(
+            "'use strict';", //
+            "var x;"));
   }
 
   @Test
   public void testAbsoluteImportsWithModuleRoots() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     moduleRoots = ImmutableList.of("/base");
     test(
         ImmutableList.of(
@@ -816,22 +1023,30 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
 
   @Test
   public void testUseImportInEs6ObjectLiteralShorthand() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     testModules(
-        "import {f} from './other.js';\nvar bar = {a: 1, f};",
         lines(
-            "var bar$$module$testcode={a: 1, f: module$other.f};",
+            "import {b} from './other.js';", //
+            "var bar = {a: 1, b};"),
+        lines(
+            "var bar$$module$testcode={a: 1, b: b$$module$other};",
             "/** @const */ var module$testcode = {};"));
 
     testModules(
-        "import {f as foo} from './other.js';\nvar bar = {a: 1, foo};",
         lines(
-            "var bar$$module$testcode={a: 1, foo: module$other.f};",
+            "import {a as foo} from './other.js';", //
+            "var bar = {a: 1, foo};"),
+        lines(
+            "var bar$$module$testcode={a: 1, foo: a$$module$other};",
             "/** @const */ var module$testcode = {};"));
 
     testModules(
-        "import f from './other.js';\nvar bar = {a: 1, f};",
         lines(
-            "var bar$$module$testcode={a: 1, f: module$other.default};",
+            "import f from './other.js';", //
+            "var bar = {a: 1, f};"),
+        lines(
+            "var bar$$module$testcode={a: 1, f: $jscompDefaultExport$$module$other};",
             "/** @const */ var module$testcode = {};"));
 
     testModules(
@@ -842,23 +1057,17 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
   }
 
   @Test
-  public void testDuplicateExportError() {
-    ModulesTestUtils.testModulesError(
-        this, "var x, y; export {x, y as x};", Es6RewriteModules.DUPLICATE_EXPORT);
-
-    ModulesTestUtils.testModulesError(
-        this,
-        "var x; export {x}; export {y as x} from './other.js';",
-        Es6RewriteModules.DUPLICATE_EXPORT);
-  }
-
-  @Test
   public void testImportAliasInTypeNode() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
     test(
         srcs(
             SourceFile.fromCode("a.js", "export class A {}"),
             SourceFile.fromCode(
-                "b.js", lines("import {A as B} from './a.js';", "const /** !B */ b = new B();"))),
+                "b.js",
+                lines(
+                    "import {A as B} from './a.js';", //
+                    "const /** !B */ b = new B();"))),
         expected(
             SourceFile.fromCode(
                 "a.js",
@@ -869,7 +1078,265 @@ public final class Es6RewriteModulesTest extends CompilerTestCase {
             SourceFile.fromCode(
                 "b.js",
                 lines(
-                    "const /** !module$a.A */ b$$module$b = new module$a.A();",
+                    "const /** !A$$module$a*/ b$$module$b = new A$$module$a();",
                     "/** @const */ var module$b = {};"))));
+  }
+
+  @Test
+  public void testExportStar() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
+    testModules(
+        "export * from './other.js';",
+        lines(
+            "/** @const */ var module$testcode = {};",
+            "/** @const */ module$testcode.Parent = Parent$$module$other;",
+            "/** @const */ module$testcode.a = a$$module$other;",
+            "/** @const */ module$testcode.b = b$$module$other;",
+            "/** @const */ module$testcode.c = c$$module$other;",
+            "/** @const */ module$testcode.class = x$$module$other;",
+            // no default
+            "/** @const */ module$testcode.name = name$$module$other;",
+            "/** @const */ module$testcode.x = x$$module$other;"));
+  }
+
+  @Test
+  public void testExportStarWithLocalExport() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
+    testModules(
+        lines(
+            "export * from './other.js';", //
+            "export let baz, zed;"),
+        lines(
+            "let baz$$module$testcode, zed$$module$testcode;",
+            "/** @const */ var module$testcode = {};",
+            "/** @const */ module$testcode.Parent = Parent$$module$other;",
+            "/** @const */ module$testcode.a = a$$module$other;",
+            "/** @const */ module$testcode.b = b$$module$other;",
+            "/** @const */ module$testcode.baz = baz$$module$testcode;",
+            "/** @const */ module$testcode.c = c$$module$other;",
+            "/** @const */ module$testcode.class = x$$module$other;",
+            "/** @const */ module$testcode.name = name$$module$other;",
+            "/** @const */ module$testcode.x = x$$module$other;",
+            "/** @const */ module$testcode.zed = zed$$module$testcode;"));
+  }
+
+  @Test
+  public void testExportStarWithLocalExportOverride() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
+    testModules(
+        lines(
+            "export * from './other.js';", //
+            "export let a, zed;"),
+        lines(
+            "let a$$module$testcode, zed$$module$testcode;",
+            "/** @const */ var module$testcode = {};",
+            "/** @const */ module$testcode.Parent = Parent$$module$other;",
+            "/** @const */ module$testcode.a = a$$module$testcode;",
+            "/** @const */ module$testcode.b = b$$module$other;",
+            "/** @const */ module$testcode.c = c$$module$other;",
+            "/** @const */ module$testcode.class = x$$module$other;",
+            "/** @const */ module$testcode.name = name$$module$other;",
+            "/** @const */ module$testcode.x = x$$module$other;",
+            "/** @const */ module$testcode.zed = zed$$module$testcode;"));
+  }
+
+  @Test
+  public void testTransitiveImport() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
+    test(
+        srcs(
+            SourceFile.fromCode("a.js", "export class A {}"),
+            SourceFile.fromCode("b.js", "export {A} from './a.js';"),
+            SourceFile.fromCode(
+                "c.js",
+                lines(
+                    "import {A} from './b.js';", //
+                    "let /** !A */ a = new A();"))),
+        expected(
+            SourceFile.fromCode(
+                "a.js",
+                lines(
+                    "class A$$module$a {}",
+                    "/** @const */ var module$a = {};",
+                    "/** @const */ module$a.A = A$$module$a;")),
+            SourceFile.fromCode(
+                "b.js",
+                lines(
+                    "/** @const */ var module$b = {};", //
+                    "/** @const */ module$b.A = A$$module$a;")),
+            SourceFile.fromCode(
+                "c.js",
+                lines(
+                    "let /** !A$$module$a*/ a$$module$c = new A$$module$a();",
+                    "/** @const */ var module$c = {};"))));
+    test(
+        srcs(
+            SourceFile.fromCode("a.js", "export class A {}"),
+            SourceFile.fromCode("b.js", "export {A as B} from './a.js';"),
+            SourceFile.fromCode(
+                "c.js",
+                lines(
+                    "import {B as C} from './b.js';", //
+                    "let /** !C */ a = new C();"))),
+        expected(
+            SourceFile.fromCode(
+                "a.js",
+                lines(
+                    "class A$$module$a {}",
+                    "/** @const */ var module$a = {};",
+                    "/** @const */ module$a.A = A$$module$a;")),
+            SourceFile.fromCode(
+                "b.js",
+                lines(
+                    "/** @const */ var module$b = {};", //
+                    "/** @const */ module$b.B = A$$module$a;")),
+            SourceFile.fromCode(
+                "c.js",
+                lines(
+                    "let /** !A$$module$a*/ a$$module$c = new A$$module$a();",
+                    "/** @const */ var module$c = {};"))));
+  }
+
+  @Test
+  public void testMutableTransitiveImport() {
+    test(
+        srcs(
+            SourceFile.fromCode("a.js", "export let A = class {}; () => (A = class {});"),
+            SourceFile.fromCode("b.js", "export {A} from './a.js';"),
+            SourceFile.fromCode(
+                "c.js",
+                lines(
+                    "import {A} from './b.js';", //
+                    "let /** !A */ a = new A();"))),
+        expected(
+            SourceFile.fromCode(
+                "a.js",
+                lines(
+                    "let A$$module$a = class {};",
+                    "()=>A$$module$a = class {};",
+                    "/** @const */ var module$a = {",
+                    "  get A() { return A$$module$a; },",
+                    "};")),
+            SourceFile.fromCode(
+                "b.js",
+                lines(
+                    "/** @const */ var module$b = {", "  get A() { return A$$module$a; },", "};")),
+            SourceFile.fromCode(
+                "c.js",
+                lines(
+                    "let /** !A$$module$a*/ a$$module$c = new A$$module$a();",
+                    "/** @const */ var module$c = {};"))));
+    test(
+        srcs(
+            SourceFile.fromCode("a.js", "export let A = class {}; () => (A = class {});"),
+            SourceFile.fromCode("b.js", "export {A as B} from './a.js';"),
+            SourceFile.fromCode(
+                "c.js",
+                lines(
+                    "import {B as C} from './b.js';", //
+                    "let /** !C */ a = new C();"))),
+        expected(
+            SourceFile.fromCode(
+                "a.js",
+                lines(
+                    "let A$$module$a = class {};",
+                    "()=>A$$module$a = class {};",
+                    "/** @const */ var module$a = {",
+                    "  get A() { return A$$module$a; },",
+                    "};")),
+            SourceFile.fromCode(
+                "b.js",
+                lines(
+                    "/** @const */ var module$b = {", "  get B() { return A$$module$a; },", "};")),
+            SourceFile.fromCode(
+                "c.js",
+                lines(
+                    "let /** !A$$module$a*/ a$$module$c = new A$$module$a();",
+                    "/** @const */ var module$c = {};"))));
+  }
+
+  @Test
+  public void testRewriteGetPropsWhileModuleReference() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
+    test(
+        srcs(
+            SourceFile.fromCode("a.js", "export class A {}"),
+            SourceFile.fromCode(
+                "b.js",
+                lines(
+                    "import * as a from './a.js';", //
+                    "export {a};")),
+            SourceFile.fromCode(
+                "c.js",
+                lines(
+                    "import * as b from './b.js';", //
+                    "let /** !b.a.A */ a = new b.a.A();"))),
+        expected(
+            SourceFile.fromCode(
+                "a.js",
+                lines(
+                    "class A$$module$a {}",
+                    "/** @const */ var module$a = {};",
+                    "/** @const */ module$a.A = A$$module$a;")),
+            SourceFile.fromCode(
+                "b.js",
+                lines(
+                    "/** @const */ var module$b = {};", //
+                    "/** @const */ module$b.a = module$a;")),
+            SourceFile.fromCode(
+                "c.js",
+                lines(
+                    "let /** !A$$module$a*/ a$$module$c = new A$$module$a();",
+                    "/** @const */ var module$c = {};"))));
+  }
+
+  @Test
+  public void testRewritePropsWhenNotModuleReference() {
+    test(
+        srcs(
+            SourceFile.fromCode(
+                "other.js", lines("export const name = {}, a = { Type: class {} };")),
+            SourceFile.fromCode(
+                "testcode",
+                lines(
+                    "import * as name from './other.js';", //
+                    "let /** !name.a.Type */ t = new name.a.Type();"))),
+        expected(
+            SourceFile.fromCode(
+                "other.js",
+                lines(
+                    "const name$$module$other = {}, a$$module$other = { Type: class {} };",
+                    "/** @const */ var module$other = {};",
+                    "/** @const */ module$other.a = a$$module$other;",
+                    "/** @const */ module$other.name = name$$module$other;")),
+            SourceFile.fromCode(
+                "testcode",
+                lines(
+                    "let /** !a$$module$other.Type */ t$$module$testcode =",
+                    "   new a$$module$other.Type();",
+                    "/** @const */ var module$testcode = {};"))));
+  }
+
+  @Test
+  public void testExportsNotImplicitlyLocallyDeclared() {
+    // TODO(b/144059297): Make this test pass when type checking runs first.
+    enableRunTypeCheckAfterProcessing();
+    test(
+        externs("var exports;"),
+        srcs("typeof exports; export {};"),
+        // Regression test; compiler used to rewrite `exports` to `exports$$module$testcode`.
+        expected("typeof exports; /** @const */ var module$testcode = {};"));
+  }
+
+  @Test
+  public void testImportMeta() {
+    setLanguage(LanguageMode.ECMASCRIPT_NEXT, LanguageMode.ECMASCRIPT_NEXT);
+
+    testError("import.meta", Es6ToEs3Util.CANNOT_CONVERT);
   }
 }

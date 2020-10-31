@@ -42,8 +42,7 @@ public final class DefaultCodingConventionTest {
     Node optArgs = IR.paramList(
         IR.name("opt_a"),
         IR.name("opt_b"));
-   Node rest = IR.paramList(
-        IR.rest(IR.name("more")));
+    Node rest = IR.paramList(IR.iterRest(IR.name("more")));
 
     assertThat(conv.isVarArgsParameter(args.getFirstChild())).isFalse();
     assertThat(conv.isVarArgsParameter(args.getLastChild())).isFalse();
@@ -201,7 +200,8 @@ public final class DefaultCodingConventionTest {
 
   @Test
   public void makeReturnTypeAssertion_assertsOnFirstArg() {
-    AssertionFunctionSpec spec = AssertionFunctionSpec.makeReturnTypeAssertion("assertNumber");
+    AssertionFunctionSpec spec =
+        AssertionFunctionSpec.forMatchesReturn().setFunctionName("assertNumber").build();
     Node callNode = parseTestCode("assertNumber(0, 1, 2, 3);").getFirstChild();
     checkState(callNode.isCall(), callNode);
     Node firstArg = NodeUtil.getArgumentForCallOrNew(callNode, /* index= */ 0);
@@ -212,7 +212,8 @@ public final class DefaultCodingConventionTest {
 
   @Test
   public void makeTruthyAssertion_assertsOnFirstArg() {
-    AssertionFunctionSpec spec = AssertionFunctionSpec.makeTruthyAssertion("assertTruthy");
+    AssertionFunctionSpec spec =
+        AssertionFunctionSpec.forTruthy().setFunctionName("assertTruthy").build();
     Node callNode = parseTestCode("assertTruthy(0, 1, 2, 3);").getFirstChild();
     checkState(callNode.isCall(), callNode);
     Node firstArg = NodeUtil.getArgumentForCallOrNew(callNode, /* index= */ 0);
@@ -225,7 +226,7 @@ public final class DefaultCodingConventionTest {
   @Test
   public void makeTruthyAssertion_withParamIndexOfTwo_assertsOnThirdArg() {
     AssertionFunctionSpec spec =
-        AssertionFunctionSpec.makeTruthyAssertion("assertTruthy", /* paramIndex= */ 2);
+        AssertionFunctionSpec.forTruthy().setFunctionName("assertTruthy").setParamIndex(2).build();
     Node callNode = parseTestCode("assertTruthy(0, 1, 2, 3);").getFirstChild();
     checkState(callNode.isCall(), callNode);
     Node firstArg = NodeUtil.getArgumentForCallOrNew(callNode, /* index= */ 0);

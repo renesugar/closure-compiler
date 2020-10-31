@@ -16,9 +16,6 @@
 
 /**
  * @fileoverview Definitions for W3C's IndexedDB API and IndexedDB API 2.0.
- * In Chrome all the IndexedDB classes are prefixed with 'webkit'.
- * In order to access constants and static methods of these classes they must
- * be duplicated with the prefix here.
  * @see http://www.w3.org/TR/2015/REC-IndexedDB-20150108/
  * @see https://www.w3.org/TR/2017/WD-IndexedDB-2-20170313/
  *
@@ -31,16 +28,7 @@
 var indexedDB;
 
 /** @type {!IDBFactory|undefined} */
-Window.prototype.moz_indexedDB;
-
-/** @type {!IDBFactory|undefined} */
-Window.prototype.mozIndexedDB;
-
-/** @type {!IDBFactory|undefined} */
-Window.prototype.webkitIndexedDB;
-
-/** @type {!IDBFactory|undefined} */
-Window.prototype.msIndexedDB;
+ServiceWorkerGlobalScope.prototype.indexedDB;
 
 
 
@@ -159,15 +147,6 @@ IDBRequest.prototype.removeEventListener = function(
 /** @override */
 IDBRequest.prototype.dispatchEvent = function(evt) {};
 
-
-/**
- * @constructor
- * @extends {IDBRequest}
- * @see http://www.w3.org/TR/IndexedDB/#idl-def-IDBRequest
- * @see https://www.w3.org/TR/IndexedDB-2/#request-api
- */
-function webkitIDBRequest() {}
-
 /**
  * @type {!IDBRequestReadyState}
  */
@@ -230,20 +209,17 @@ IDBOpenDBRequest.prototype.onupgradeneeded = function(e) {};
 function IDBDatabase() {}
 
 /**
- * @type {string}
- * @const
+ * @const {string}
  */
 IDBDatabase.prototype.name;
 
 /**
- * @type {number}
- * @const
+ * @const {number}
  */
 IDBDatabase.prototype.version;
 
 /**
- * @type {!DOMStringList}
- * @const
+ * @const {!DOMStringList}
  */
 IDBDatabase.prototype.objectStoreNames;
 
@@ -459,26 +435,22 @@ function IDBIndex() {}
 IDBIndex.prototype.name;
 
 /**
- * @type {!IDBObjectStore}
- * @const
+ * @const {!IDBObjectStore}
  */
 IDBIndex.prototype.objectStore;
 
 /**
- * @type {*}
- * @const
+ * @const {*}
  */
 IDBIndex.prototype.keyPath;
 
 /**
- * @type {boolean}
- * @const
+ * @const {boolean}
  */
 IDBIndex.prototype.multiEntry;
 
 /**
- * @type {boolean}
- * @const
+ * @const {boolean}
  */
 IDBIndex.prototype.unique;
 
@@ -541,34 +513,22 @@ IDBIndex.prototype.count = function(opt_key) {};
 function IDBCursor() {}
 
 /**
- * @constructor
- * @extends {IDBCursor}
- * @see http://www.w3.org/TR/IndexedDB/#idl-def-IDBCursor
- * @see https://www.w3.org/TR/IndexedDB-2/#cursor-interface
- */
-function webkitIDBCursor() {}
-
-/**
- * @type {(!IDBObjectStore|!IDBIndex)}
- * @const
+ * @const {(!IDBObjectStore|!IDBIndex)}
  */
 IDBCursor.prototype.source;
 
 /**
- * @type {!IDBCursorDirection}
- * @const
+ * @const {!IDBCursorDirection}
  */
 IDBCursor.prototype.direction;
 
 /**
- * @type {!IDBKeyType}
- * @const
+ * @const {!IDBKeyType}
  */
 IDBCursor.prototype.key;
 
 /**
- * @type {!IDBKeyType}
- * @const
+ * @const {!IDBKeyType}
  */
 IDBCursor.prototype.primaryKey;
 
@@ -626,28 +586,17 @@ IDBCursorWithValue.prototype.value; // readonly
 function IDBTransaction() {}
 
 /**
- * @constructor
- * @extends {IDBTransaction}
- * @see http://www.w3.org/TR/IndexedDB/#idl-def-IDBTransaction
- * @see https://www.w3.org/TR/IndexedDB-2/#transaction
- */
-function webkitIDBTransaction() {}
-
-/**
- * @type {!DOMStringList}
- * @const
+ * @const {!DOMStringList}
  */
 IDBTransaction.prototype.objectStoreNames;
 
 /**
- * @type {!IDBTransactionMode}
- * @const
+ * @const {!IDBTransactionMode}
  */
 IDBTransaction.prototype.mode;
 
 /**
- * @type {!IDBDatabase}
- * @const
+ * @const {!IDBDatabase}
  */
 IDBTransaction.prototype.db;
 
@@ -667,6 +616,12 @@ IDBTransaction.prototype.objectStore = function(name) {};
  * @return {undefined}
  */
 IDBTransaction.prototype.abort = function() {};
+
+/**
+ * Commits the transaction.
+ * @return {undefined}
+ */
+IDBTransaction.prototype.commit = function() {};
 
 /**
  * @type {?function(!Event)}
@@ -692,34 +647,22 @@ IDBTransaction.prototype.onerror;
 function IDBKeyRange() {}
 
 /**
- * @constructor
- * @extends {IDBKeyRange}
- * @see http://www.w3.org/TR/IndexedDB/#idl-def-IDBKeyRange
- * @see https://www.w3.org/TR/IndexedDB-2/#keyrange
- */
-function webkitIDBKeyRange() {}
-
-/**
- * @type {*}
- * @const
+ * @const {*}
  */
 IDBKeyRange.prototype.lower;
 
 /**
- * @type {*}
- * @const
+ * @const {*}
  */
 IDBKeyRange.prototype.upper;
 
 /**
- * @type {boolean}
- * @const
+ * @const {boolean}
  */
 IDBKeyRange.prototype.lowerOpen;
 
 /**
- * @type {boolean}
- * @const
+ * @const {boolean}
  */
 IDBKeyRange.prototype.upperOpen;
 
@@ -770,29 +713,11 @@ IDBKeyRange.prototype.includes = function(key) {};
 function IDBVersionChangeEvent(type, opt_eventInit) {}
 
 /**
- * @type {number}
- * @const
+ * @const {number}
  */
 IDBVersionChangeEvent.prototype.oldVersion;
 
 /**
- * @type {?number}
- * @const
+ * @const {?number}
  */
 IDBVersionChangeEvent.prototype.newVersion;
-
-
-/**
- * @param {string} type
- * @param {!IDBVersionChangeEventInit=} opt_eventInit
- * @constructor
- * @extends {IDBVersionChangeEvent}
- * @see http://www.w3.org/TR/IndexedDB/#idl-def-IDBVersionChangeEvent
- */
-function webkitIDBVersionChangeEvent(type, opt_eventInit) {}
-
-/**
- * @type {string}
- * @const
- */
-webkitIDBVersionChangeEvent.prototype.version;

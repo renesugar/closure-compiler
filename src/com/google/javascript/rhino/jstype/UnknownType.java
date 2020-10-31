@@ -55,7 +55,13 @@ public class UnknownType extends ObjectType {
 
   UnknownType(JSTypeRegistry registry, boolean isChecked) {
     super(registry);
+    this.eagerlyResolveToSelf();
     this.isChecked = isChecked;
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return JSTypeClass.UNKNOWN;
   }
 
   @Override
@@ -109,17 +115,6 @@ public class UnknownType extends ObjectType {
   }
 
   @Override
-  public boolean isSubtype(JSType that) {
-    return isSubtype(that, null, SubtypingMode.NORMAL);
-  }
-
-  @Override
-  protected boolean isSubtype(JSType that,
-      ImplCache implicitImplCache, SubtypingMode subtypingMode) {
-    return true;
-  }
-
-  @Override
   public <T> T visit(Visitor<T> visitor) {
     return visitor.caseUnknownType();
   }
@@ -129,8 +124,8 @@ public class UnknownType extends ObjectType {
   }
 
   @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return sb.append(getReferenceName());
+  void appendTo(TypeStringBuilder sb) {
+    sb.append(getReferenceName());
   }
 
   @Override
@@ -171,8 +166,8 @@ public class UnknownType extends ObjectType {
   }
 
   @Override
-  JSType resolveInternal(ErrorReporter reporter) {
-    return this;
+  final JSType resolveInternal(ErrorReporter reporter) {
+    throw new AssertionError();
   }
 
   @Override

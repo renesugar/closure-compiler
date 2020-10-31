@@ -39,6 +39,7 @@
 package com.google.javascript.rhino.jstype;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.javascript.rhino.testing.TypeSubject.assertType;
 
 import com.google.javascript.rhino.testing.BaseJSTypeTestCase;
 import org.junit.Test;
@@ -70,7 +71,7 @@ public class EnumElementTypeTest extends BaseJSTypeTestCase {
   }
 
   @Test
-  public void testMeet() {
+  public void testGetGreatestSubtype() {
     EnumElementType typeA = registry.createEnumType(
         "typeA", null, createUnionType(NUMBER_TYPE, STRING_TYPE))
         .getElementsType();
@@ -84,5 +85,48 @@ public class EnumElementTypeTest extends BaseJSTypeTestCase {
     assertThat(numbersOfA.isEmptyType()).isFalse();
     assertThat(numbersOfA.toString()).isEqualTo("typeA<number>");
     assertThat(numbersOfA.isSubtypeOf(typeA)).isTrue();
+  }
+
+  @Test
+  public void testGetGreatestSubtype_twoEnumElementTypes() {
+    EnumElementType typeA = registry.createEnumType(
+        "typeA", null, NUMBER_TYPE).getElementsType();
+    EnumElementType typeB = registry.createEnumType(
+        "typeB", null, NUMBER_TYPE).getElementsType();
+
+    JSType greatestSubtype = EnumElementType.getGreatestSubtype(typeA, typeB);
+
+    assertType(greatestSubtype).isSubtypeOf(typeA);
+    assertType(greatestSubtype).isSubtypeOf(typeB);
+    assertType(greatestSubtype).isNotEqualTo(typeA);
+    assertType(greatestSubtype).isNotEqualTo(typeB);
+
+    assertType(typeA).isNotSubtypeOf(greatestSubtype);
+    assertType(typeB).isNotSubtypeOf(greatestSubtype);
+  }
+
+  @Test
+  public void testGetGreatestSubtype_twoEnumElementTypes_postResolution() {
+    EnumElementType typeA = registry.createEnumType("typeA", null, NUMBER_TYPE).getElementsType();
+    EnumElementType typeB = registry.createEnumType("typeB", null, NUMBER_TYPE).getElementsType();
+
+    JSType greatestSubtype = EnumElementType.getGreatestSubtype(typeA, typeB);
+
+    assertType(greatestSubtype).isSubtypeOf(typeA);
+    assertType(greatestSubtype).isSubtypeOf(typeB);
+    assertType(greatestSubtype).isNotEqualTo(typeA);
+    assertType(greatestSubtype).isNotEqualTo(typeB);
+
+    assertType(typeA).isNotSubtypeOf(greatestSubtype);
+    assertType(typeB).isNotSubtypeOf(greatestSubtype);
+  }
+
+  @Test
+  public void testEqualityOfEnumTypes_withSameReferenceName() {
+    EnumType firstFoo = registry.createEnumType("Foo", null, NUMBER_TYPE);
+    EnumType secondFoo = registry.createEnumType("Foo", null, NUMBER_TYPE);
+
+    assertType(firstFoo).isNotEqualTo(secondFoo);
+    assertType(firstFoo.getElementsType()).isNotEqualTo(secondFoo.getElementsType());
   }
 }

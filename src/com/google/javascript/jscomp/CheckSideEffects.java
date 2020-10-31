@@ -16,6 +16,7 @@
 
 package com.google.javascript.jscomp;
 
+import com.google.common.base.Ascii;
 import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.JSDocInfo;
@@ -35,7 +36,6 @@ import java.util.Set;
  * foo();;  // probably just a stray-semicolon. Doesn't hurt to check though
  * </pre>
  * and generates warnings.
- *
  */
 final class CheckSideEffects extends AbstractPostOrderCallback
     implements HotSwapCompilerPass {
@@ -118,7 +118,7 @@ final class CheckSideEffects extends AbstractPostOrderCallback
     boolean isResultUsed = NodeUtil.isExpressionResultUsed(n);
     boolean isSimpleOp = NodeUtil.isSimpleOperator(n);
     if (!isResultUsed) {
-      if (isSimpleOp || !NodeUtil.mayHaveSideEffects(n, t.getCompiler())) {
+      if (isSimpleOp || !t.getCompiler().getAstAnalyzer().mayHaveSideEffects(n)) {
         if (report) {
           String msg = "This code lacks side-effects. Is there a bug?";
           if (n.isString() || n.isTemplateLit()) {
@@ -126,7 +126,7 @@ final class CheckSideEffects extends AbstractPostOrderCallback
           } else if (isSimpleOp) {
             msg =
                 "The result of the '"
-                    + n.getToken().toString().toLowerCase()
+                    + Ascii.toLowerCase(n.getToken().toString())
                     + "' operator is not being used.";
           }
 

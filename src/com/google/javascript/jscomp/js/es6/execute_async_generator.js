@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 
+/**
+ * @fileoverview Runtime logic for transpiled async functions.
+ * @suppress {uselessCode}
+ */
 'require base';
-'require es6/promise';
 'require es6/generator_engine';
 
 /**

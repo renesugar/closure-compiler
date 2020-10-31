@@ -23,6 +23,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.NodeUtil.Visitor;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
+import com.google.javascript.jscomp.testing.NoninjectingCompiler;
+import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.jstype.FunctionType;
 import com.google.javascript.rhino.jstype.JSType;
@@ -103,7 +105,8 @@ public class RewriteAsyncFunctionsTest extends CompilerTestCase {
    * last compile.
    */
   private CodeSubTree findClassDefinition(String wantedClassName) {
-    return new CodeSubTree(getLastCompiler().getJsRoot()).findClassDefinition(wantedClassName);
+    return new CodeSubTree(getLastCompiler().getRoot().getSecondChild())
+        .findClassDefinition(wantedClassName);
   }
 
   /** Return a list of all Nodes matching the given predicate starting at the given root. */
@@ -146,6 +149,65 @@ public class RewriteAsyncFunctionsTest extends CompilerTestCase {
 
   private final ObjectType getGlobalObjectType(String globalTypeName) {
     return getGlobalJSType(globalTypeName).assertObjectType();
+  }
+
+  @Test
+  public void testDefaultParameterUsingThis() {
+    test(
+        lines(
+            "class X {",
+            "  /**",
+            "   * @param {number} a",
+            "   */",
+            "  constructor(a) {",
+            "    /** @const */ this.a = a;",
+            "  }",
+            "  /**",
+            "   * @param {number} b",
+            "   * @return {!Promise<number>}",
+            "   */",
+            "  async m(b = this.a) {",
+            "      return this.a + b;",
+            "  }",
+            "}"),
+        lines(
+            "class X {",
+            "  /**",
+            "   * @param {number} a",
+            "   */",
+            "  constructor(a) {",
+            "    /** @const */ this.a = a;",
+            "  }",
+            "  /**",
+            "   * @param {number} b",
+            "   * @return {!Promise<number>}",
+            "   */",
+            "  m(b = this.a) {", // this in parameter default value doesn't get changed
+            "    const $jscomp$async$this = this;",
+            "    return $jscomp.asyncExecutePromiseGeneratorFunction(",
+            "        function* () {",
+            "            return $jscomp$async$this.a + b;",
+            "        });",
+            "  }",
+            "}"));
+
+    ObjectType classXInstanceType = getGlobalObjectType("X");
+
+    ImmutableList<Node> thisAliasNameReferences =
+        findClassDefinition("X")
+            .findMethodDefinition("m")
+            .findMatchingQNameReferences("$jscomp$async$this");
+    assertThat(thisAliasNameReferences).hasSize(2);
+
+    // const $jscomp$async$this = this;
+    // confirm that `this` and `$jscomp$async$this` nodes have the right types in declaration
+    Node aliasDeclarationReference = thisAliasNameReferences.get(0);
+    assertNode(aliasDeclarationReference).hasJSTypeThat().isEqualTo(classXInstanceType);
+    Node thisNode = aliasDeclarationReference.getOnlyChild();
+    assertNode(thisNode).isThis().hasJSTypeThat().isEqualTo(classXInstanceType);
+
+    // make sure the single reference to $jscomp$async$this has the right type
+    assertNode(thisAliasNameReferences.get(1)).hasJSTypeThat().isEqualTo(classXInstanceType);
   }
 
   @Test
@@ -522,8 +584,7 @@ public class RewriteAsyncFunctionsTest extends CompilerTestCase {
     Node fakeSuperDotM = wrapperArrowFunction.getLastChild();
     assertNode(fakeSuperDotM).hasJSTypeThat().isEqualTo(classAPropertyMType);
     Node fakeSuperNode = fakeSuperDotM.getFirstChild();
-    // TODO(b/118174876): We currently type `super` as unknown in static methods.
-    assertNode(fakeSuperNode).isCall().hasJSTypeThat().toStringIsEqualTo("?");
+    assertNode(fakeSuperNode).isCall().hasJSTypeThat().toStringIsEqualTo("(typeof A)");
     assertNode(fakeSuperNode.getFirstChild()).matchesQualifiedName("Object.getPrototypeOf");
   }
 
@@ -841,5 +902,54 @@ public class RewriteAsyncFunctionsTest extends CompilerTestCase {
             "          return 1;",
             "        });",
             "}"));
+  }
+
+  @Test
+  public void testGlobalScopeArrowFunctionRefersToThis() {
+    test(
+        "let f = async () => this;",
+        lines(
+            "let f = () => {",
+            "    const $jscomp$async$this = this;",
+            "    return $jscomp.asyncExecutePromiseGeneratorFunction(",
+            "        function* () {",
+            "          return $jscomp$async$this;",
+            "        });",
+            "}"));
+  }
+
+  @Test
+  public void testGlobalScopeAsyncArrowFunctionDefaultParamValueRefersToThis() {
+    test(
+        "let f = async (t = this) => t;",
+        lines(
+            "let f = (t = this) => {",
+            "    return $jscomp.asyncExecutePromiseGeneratorFunction(",
+            "        function* () {",
+            "          return t;",
+            "        });",
+            "}"));
+  }
+
+  @Test
+  public void testNestedAsyncArrowFunctionDefaultParamValueRefersToThis() {
+    test(
+        lines("let f = async function(outerT = this) {", "  return async (t = this) => t;", "};"),
+        lines(
+            // `this` is not aliased here
+            "let f = function(outerT = this) {",
+            "  const $jscomp$async$this = this;",
+            "  return $jscomp.asyncExecutePromiseGeneratorFunction(",
+            "      function* () {",
+            // `this` is aliased here
+            "        return (t = $jscomp$async$this) => {",
+            "          return $jscomp.asyncExecutePromiseGeneratorFunction(",
+            "              function* () {",
+            "                return t;",
+            "              });",
+            "        };",
+            "      });",
+            "};",
+            ""));
   }
 }

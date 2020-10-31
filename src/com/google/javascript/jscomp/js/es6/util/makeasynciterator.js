@@ -23,19 +23,18 @@
 /**
  * Creates an iterator for the given iterable.
  *
- * @param {string|!AsyncIterable<T>|!Iterable<T>|!Iterator<T>|!Arguments<T>} iterable
+ * @param {string|!AsyncIterable<T>|!Iterable<T>|!Iterator<T>|!Arguments} iterable
  * @return {!AsyncIteratorIterable<T>}
  * @template T
  * @suppress {reportUnknownTypes}
  */
 $jscomp.makeAsyncIterator = function(iterable) {
-  $jscomp.initSymbolAsyncIterator();
   var asyncIteratorFunction = (iterable)[Symbol.asyncIterator];
   if (asyncIteratorFunction !== undefined) {
     return asyncIteratorFunction.call(iterable);
   }
   return new $jscomp.AsyncIteratorFromSyncWrapper($jscomp.makeIterator(
-      /** @type {string|!Iterable<T>|!Iterator<T>|!Arguments<T>} */
+      /** @type {string|!Iterable<T>|!Iterator<T>|!Arguments} */
       (iterable)));
 };
 

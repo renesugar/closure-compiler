@@ -89,7 +89,6 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
     return new RemoveUnusedCode.Builder(compiler)
         .removeUnusedPrototypeProperties(true)
         .removeUnusedThisProperties(true)
-        .removeUnusedConstructorProperties(true)
         .removeUnusedObjectDefinePropertiesDefinitions(true)
         .build();
   }
@@ -98,9 +97,11 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
   @Before
   public void setUp() throws Exception {
     super.setUp();
+    // Allow testing of features that aren't fully supported for output yet.
+    setAcceptedLanguage(LanguageMode.ECMASCRIPT_NEXT_IN);
     enableNormalize();
     enableGatherExternProperties();
-    setAcceptedLanguage(LanguageMode.ECMASCRIPT_2017);
+    onlyValidateNoNewGettersAndSetters();
     disableTypeCheck();
   }
 
@@ -203,9 +204,22 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
   }
 
   @Test
+  public void testDestructuringRest() {
+    testSame(
+        lines(
+            "function Foo() {}", //
+            "Foo.a = function() {};",
+            "({ ...Foo.a.b } = 0);"));
+  }
+
+  @Test
   public void testExprResult() {
     test("this.x", "");
     test("externFunction().prototype.x", "externFunction()");
+    // It doesn't make much sense to use optional chaining in these cases, but if you do,
+    // it shouldn't prevent unused property removal
+    test("this?.x", "");
+    test("externFunction()?.prototype.x", "externFunction()");
   }
 
   @Test
@@ -285,10 +299,10 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
   public void testPrototypeProps2() {
     // don't remove properties that are exported by convention
     testSame(
-        "function A() {this._foo = 1;}\n" +
-        "A.prototype._foo = 0;\n" +
-        "A.prototype.method = function() {this._foo++};\n" +
-        "new A().method()\n");
+        "function A() {this._foo = 1;}\n"
+            + "A.prototype._foo = 0;\n"
+            + "A.prototype.method = function() {this._foo++};\n"
+            + "new A().method()\n");
   }
 
   @Test
@@ -314,9 +328,6 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
 
   @Test
   public void testES6StaticProperty() {
-    // TODO(bradfordcsmith): Neither type checker understands ES6 classes yet.
-    disableTypeCheck();
-
     test(
         "class C { static prop() {} }", // preserve newline
         "class C {                  }");
@@ -324,10 +335,7 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
 
   @Test
   public void testES6StaticProperty2() {
-    disableTypeCheck();
-
-    // TODO(bradfordcsmith): When NTI understands ES6 classes it will allow removal of `C.prop = 1`.
-    testSame("class C {} C.prop = 1;");
+    test("class C {} C.prop = 1;", "class C {}");
   }
 
   @Test
@@ -348,11 +356,8 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
 
     test(
         lines(
-            "/** @constructor */ function C() {}",
-            "Object.defineProperties(C, {prop:{value:1}});"),
-        lines(
-            "/** @constructor */ function C() {}",
-            "Object.defineProperties(C, {});"));
+            "/** @constructor */ function C() {}", "Object.defineProperties(C, {prop:{value:1}});"),
+        lines("/** @constructor */ function C() {}", "Object.defineProperties(C, {});"));
   }
 
   @Test
@@ -367,9 +372,7 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
             "    get:function(){},",
             "    set:function(a){},",
             "}});"),
-        lines(
-            "/** @constructor */ function C() {}",
-            "Object.defineProperties(C, {});"));
+        lines("/** @constructor */ function C() {}", "Object.defineProperties(C, {});"));
   }
 
   // side-effect in definition retains property definition, but doesn't count as a reference
@@ -415,9 +418,7 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
         lines(
             "/** @constructor */ function C() {}",
             "Object.defineProperties(C, {prop:{get:function () {return new C}}});"),
-        lines(
-            "/** @constructor */ function C() {}",
-            "Object.defineProperties(C, {});"));
+        lines("/** @constructor */ function C() {}", "Object.defineProperties(C, {});"));
   }
 
   @Test
@@ -428,9 +429,7 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
         lines(
             "/** @constructor */ function C() {}",
             "Object.defineProperties(C, {prop:{set:function (a) {return alert(a)}}});"),
-        lines(
-            "/** @constructor */ function C() {}",
-            "Object.defineProperties(C, {});"));
+        lines("/** @constructor */ function C() {}", "Object.defineProperties(C, {});"));
   }
 
   @Test
@@ -444,19 +443,14 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
   }
 
   @Test
-  public void testObjectDefineProperties_used_setter_removed() {
-    // TODO(bradfordcsmith): Either remove, fix this, or document it as a limitation of advanced
-    // mode optimizations.
+  public void testObjectDefineProperties_usedSetter_notRemoved() {
     enableTypeCheck();
 
-    test(
+    testSame(
         lines(
             "/** @constructor */ function C() {}",
             "Object.defineProperties(C, {prop:{set:function (a) {alert(2)}}});",
-            "C.prop = 2;"),
-        lines(
-            "/** @constructor */ function C() {}",
-            "Object.defineProperties(C, {                                  });"));
+            "C.prop = 2;"));
   }
 
   @Test
@@ -537,7 +531,7 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
             "/** @constructor @struct */",
             "var C = function() {};",
             "/** @type {?} */",
-            "C.prototype.value;",
+            "C.prototype.value = 0;",
             "$jscomp.global.Object.defineProperties(C.prototype, {",
             "  value: {",
             "    configurable: true,",
@@ -633,10 +627,10 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
             "[this.x        ] = [1, 2]", // preserve newline
             "var p = this.x;"));
 
-    // Test rest destructuring removal
+    // Test rest destructuring, `this` property
     test(
         "[this.x, ...this.z] = [1, 2, 3]", // preserve newline
-        "[                 ] = [1, 2, 3]");
+        "[      , ...this.z] = [1, 2, 3]");
 
     // Test rest destructuring with normal variable
     test(
@@ -673,12 +667,8 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
 
     // Test obj destructuring prevent removal
     test(
-        lines(
-            "({a: this.x, b: this.y} = {a: 1, b: 2});",
-            "var p = this.x;"),
-        lines(
-            "({a: this.x} = {a: 1, b: 2});",
-            "var p = this.x;"));
+        lines("({a: this.x, b: this.y} = {a: 1, b: 2});", "var p = this.x;"),
+        lines("({a: this.x} = {a: 1, b: 2});", "var p = this.x;"));
 
     // Test obj destructuring with old style class
     testSame(
@@ -752,6 +742,19 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
   }
 
   @Test
+  public void testDestrucuturing_assginmentToProperty_consideredUse() {
+    testSame(
+        lines(
+            "class Foo {",
+            "  constructor() {",
+            "    this.x = 0;",
+            "  }",
+            "}",
+            "",
+            "({a: new Foo().x} = {a: 0});"));
+  }
+
+  @Test
   public void testEs6DefaultParameter() {
     test(
         "function foo(x, y = this.a = 1) {}", // preserve newline
@@ -773,18 +776,8 @@ public final class RemoveUnusedCodeClassPropertiesTest extends CompilerTestCase 
             "   return await promise;",
             "}"));
 
-    testSame(
-        lines(
-            "async function foo() {",
-            "   this.x = 1;",
-            "   return await this.x;",
-            "}"));
+    testSame(lines("async function foo() {", "   this.x = 1;", "   return await this.x;", "}"));
 
-    testSame(
-        lines(
-            "this.x = 1;",
-            "async function foo() {",
-            "   return await this.x;",
-            "}"));
+    testSame(lines("this.x = 1;", "async function foo() {", "   return await this.x;", "}"));
   }
 }

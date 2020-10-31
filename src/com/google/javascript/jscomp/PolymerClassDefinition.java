@@ -19,15 +19,23 @@ import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkState;
 
 import com.google.common.base.CaseFormat;
+import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.PolymerBehaviorExtractor.BehaviorDefinition;
 import com.google.javascript.jscomp.PolymerPass.MemberDefinition;
+import com.google.javascript.jscomp.modules.ModuleMetadataMap.ModuleMetadata;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
 /**
@@ -49,6 +57,9 @@ final class PolymerClassDefinition {
   /** The target node (LHS) for the Polymer element definition. */
   final Node target;
 
+  /** Whether the target of this element is a generated node */
+  final boolean hasGeneratedLhs;
+
   /** The object literal passed to the call to the Polymer() function. */
   final Node descriptor;
 
@@ -61,6 +72,9 @@ final class PolymerClassDefinition {
   /** Properties declared in the Polymer "properties" block. */
   final List<MemberDefinition> props;
 
+  /** Properties declared in the Polymer behavior's "properties" block. */
+  final Map<MemberDefinition, BehaviorDefinition> behaviorProps;
+
   /** Methods on the element. */
   @Nullable final List<MemberDefinition> methods;
 
@@ -70,26 +84,32 @@ final class PolymerClassDefinition {
   /** Language features that should be carried over to the extraction destination. */
   @Nullable final FeatureSet features;
 
+  private String interfaceName = null;
+
   PolymerClassDefinition(
       DefinitionType defType,
       Node definition,
       Node target,
+      boolean hasGeneratedLhs,
       Node descriptor,
       JSDocInfo classInfo,
       MemberDefinition constructor,
       String nativeBaseElement,
       List<MemberDefinition> props,
+      Map<MemberDefinition, BehaviorDefinition> behaviorProps,
       List<MemberDefinition> methods,
       ImmutableList<BehaviorDefinition> behaviors,
       FeatureSet features) {
     this.defType = defType;
     this.definition = definition;
     this.target = target;
+    this.hasGeneratedLhs = hasGeneratedLhs;
     checkState(descriptor == null || descriptor.isObjectLit());
     this.descriptor = descriptor;
     this.constructor = constructor;
     this.nativeBaseElement = nativeBaseElement;
     this.props = props;
+    this.behaviorProps = behaviorProps;
     this.methods = methods;
     this.behaviors = behaviors;
     this.features = features;
@@ -99,8 +119,12 @@ final class PolymerClassDefinition {
    * Validates the class definition and if valid, destructively extracts the class definition from
    * the AST.
    */
-  @Nullable static PolymerClassDefinition extractFromCallNode(
-      Node callNode, AbstractCompiler compiler, GlobalNamespace globalNames) {
+  @Nullable
+  static PolymerClassDefinition extractFromCallNode(
+      Node callNode,
+      AbstractCompiler compiler,
+      ModuleMetadata moduleMetadata,
+      PolymerBehaviorExtractor behaviorExtractor) {
     Node descriptor = NodeUtil.getArgumentForCallOrNew(callNode, 0);
     if (descriptor == null || !descriptor.isObjectLit()) {
       // report bad class definition
@@ -120,11 +144,19 @@ final class PolymerClassDefinition {
       return null;
     }
 
+    boolean hasGeneratedLhs = false;
     Node target;
     if (NodeUtil.isNameDeclaration(callNode.getGrandparent())) {
       target = IR.name(callNode.getParent().getString());
     } else if (callNode.getParent().isAssign()) {
-      target = callNode.getParent().getFirstChild().cloneTree();
+      if (isGoogModuleExports(callNode.getParent())) {
+        // `exports = Polymer({` in a goog.module requires special handling, as adding a
+        // duplicate assignment to exports just confuses the compiler. Create a dummy declaration
+        // var exportsForPolymer$jscomp0 = Polymer({ // ...
+        target = createDummyGoogModuleExportsTarget(compiler, callNode);
+      } else {
+        target = callNode.getParent().getFirstChild().cloneTree();
+      }
     } else {
       String elNameStringBase =
           elName.isQualifiedName()
@@ -133,6 +165,7 @@ final class PolymerClassDefinition {
       String elNameString = CaseFormat.LOWER_HYPHEN.to(CaseFormat.UPPER_CAMEL, elNameStringBase);
       elNameString += "Element";
       target = IR.name(elNameString);
+      hasGeneratedLhs = true;
     }
 
     JSDocInfo classInfo = NodeUtil.getBestJSDocInfo(target);
@@ -151,21 +184,31 @@ final class PolymerClassDefinition {
     String nativeBaseElement = baseClass == null ? null : baseClass.getString();
 
     Node behaviorArray = NodeUtil.getFirstPropMatchingKey(descriptor, "behaviors");
-    PolymerBehaviorExtractor behaviorExtractor =
-        new PolymerBehaviorExtractor(compiler, globalNames);
-    ImmutableList<BehaviorDefinition> behaviors = behaviorExtractor.extractBehaviors(behaviorArray);
-    List<MemberDefinition> allProperties = new ArrayList<>();
+    ImmutableList<BehaviorDefinition> behaviors =
+        behaviorExtractor.extractBehaviors(behaviorArray, moduleMetadata);
+    List<MemberDefinition> properties = new ArrayList<>();
+    Map<MemberDefinition, BehaviorDefinition> behaviorProps = new LinkedHashMap<>();
     for (BehaviorDefinition behavior : behaviors) {
-      overwriteMembersIfPresent(allProperties, behavior.props);
+      for (MemberDefinition prop : behavior.props) {
+        behaviorProps.put(prop, behavior);
+      }
     }
     overwriteMembersIfPresent(
-        allProperties,
+        properties,
         PolymerPassStaticUtils.extractProperties(
             descriptor,
             DefinitionType.ObjectLiteral,
             compiler,
             /** constructor= */
             null));
+
+    // Behaviors might get included multiple times for the same element. See test case
+    // testDuplicatedBehaviorsAreCopiedOnce
+    // In those cases, behaviorProps will have repeated names. We must remove those duplicates.
+    removeDuplicateBehaviorProps(behaviorProps);
+
+    // Remove behavior properties which are already present in element properties
+    removeBehaviorPropsOverlappingWithElementProps(behaviorProps, properties);
 
     FeatureSet newFeatures = null;
     if (!behaviors.isEmpty()) {
@@ -191,14 +234,57 @@ final class PolymerClassDefinition {
         DefinitionType.ObjectLiteral,
         callNode,
         target,
+        hasGeneratedLhs,
         descriptor,
         classInfo,
         new MemberDefinition(ctorInfo, null, constructor),
         nativeBaseElement,
-        allProperties,
+        properties,
+        behaviorProps,
         methods,
         behaviors,
         newFeatures);
+  }
+
+  private static boolean isGoogModuleExports(Node assign) {
+    // Verify this is an assignment to a name `exports`
+    if (!assign.getParent().isExprResult() || !assign.getFirstChild().matchesName("exports")) {
+      return false;
+    }
+    // Verify the assignment is within either a goog.module or goog.loadModule
+    Node containingBlock = assign.getGrandparent();
+    return (containingBlock.isModuleBody()
+            && containingBlock.getParent().getBooleanProp(Node.GOOG_MODULE))
+        || NodeUtil.isBundledGoogModuleScopeRoot(containingBlock);
+  }
+
+  /**
+   * Adding our usual multiple assignments <code>
+   *
+   *   /** @constructor @extends {PolymerElement} * /
+   *   var FooElement = function() {};
+   *   FooElement = Polymer() {
+   *
+   *   }
+   *   </code> confuses goog.module rewriting when the Polymer call is assigned to `exports. Instead
+   * create a new module local, and export that name.
+   *
+   * @param callNode a Polymer({}) call
+   * @return The new target node for the Polymer call
+   */
+  private static Node createDummyGoogModuleExportsTarget(AbstractCompiler compiler, Node callNode) {
+    String madeUpName = "exportsForPolymer$jscomp" + compiler.getUniqueNameIdSupplier().get();
+    Node assignExpr = callNode.getGrandparent();
+    Node moduleBody = assignExpr.getParent();
+
+    Node exportName = callNode.getParent().getFirstChild();
+    Node target = IR.name(madeUpName).clonePropsFrom(exportName).srcref(exportName);
+    callNode.replaceWith(target);
+    Node newDecl = IR.var(target.cloneNode(), callNode).srcref(assignExpr);
+    moduleBody.addChildBefore(newDecl, assignExpr);
+    newDecl.setJSDocInfo(assignExpr.getJSDocInfo());
+    assignExpr.setJSDocInfo(null);
+    return target;
   }
 
   /**
@@ -257,7 +343,7 @@ final class PolymerClassDefinition {
       ctorInfo = NodeUtil.getBestJSDocInfo(constructor);
     }
 
-    List<MemberDefinition> allProperties =
+    List<MemberDefinition> properties =
         PolymerPassStaticUtils.extractProperties(
             propertiesDescriptor, DefinitionType.ES6Class, compiler, constructor);
 
@@ -274,11 +360,13 @@ final class PolymerClassDefinition {
         DefinitionType.ES6Class,
         classNode,
         target,
+        /* hasGeneratedLhs= */ false,
         propertiesDescriptor,
         classInfo,
         new MemberDefinition(ctorInfo, null, constructor),
         null,
-        allProperties,
+        properties,
+        null,
         methods,
         null,
         null);
@@ -301,6 +389,55 @@ final class PolymerClassDefinition {
     }
   }
 
+  /**
+   * Removes duplicate properties from the given map, keeping only the first property
+   *
+   * <p>Duplicates occur when either the same behavior is transitively added multiple times to
+   * Polymer element, or when two unique added behaviors share a property with the same name.
+   */
+  private static void removeDuplicateBehaviorProps(
+      Map<MemberDefinition, BehaviorDefinition> behaviorProps) {
+    if (behaviorProps == null) {
+      return;
+    }
+    Iterator<Map.Entry<MemberDefinition, BehaviorDefinition>> behaviorsItr =
+        behaviorProps.entrySet().iterator();
+    Set<String> seen = new HashSet<>();
+    while (behaviorsItr.hasNext()) {
+      MemberDefinition memberDefinition = behaviorsItr.next().getKey();
+      String propertyName = memberDefinition.name.getString();
+      if (!seen.add(propertyName)) {
+        behaviorsItr.remove();
+      }
+    }
+  }
+
+  /**
+   * Removes any behavior properties from the given map that have the same name as a property in the
+   * given list.
+   *
+   * <p>For example, if a Polymer element with a property "name" depends on a behavior with a
+   * property "name", then this method removes the behavior property in favor of the element
+   * property.
+   */
+  private static void removeBehaviorPropsOverlappingWithElementProps(
+      Map<MemberDefinition, BehaviorDefinition> behaviorProps,
+      List<MemberDefinition> polymerElementProps) {
+    if (behaviorProps == null) {
+      return;
+    }
+    Set<String> elementPropNames =
+        polymerElementProps.stream().map(x -> x.name.getString()).collect(Collectors.toSet());
+    Iterator<Map.Entry<MemberDefinition, BehaviorDefinition>> behaviorsItr =
+        behaviorProps.entrySet().iterator();
+    while (behaviorsItr.hasNext()) {
+      MemberDefinition memberDefinition = behaviorsItr.next().getKey();
+      if (elementPropNames.contains(memberDefinition.name.getString())) {
+        behaviorsItr.remove();
+      }
+    }
+  }
+
   @Override
   public String toString() {
     return toStringHelper(this)
@@ -310,5 +447,16 @@ final class PolymerClassDefinition {
         .add("nativeBaseElement", nativeBaseElement)
         .omitNullValues()
         .toString();
+  }
+
+  String getInterfaceName(Supplier<String> uniqueIdSupplier) {
+    if (interfaceName == null) {
+      interfaceName =
+          "Polymer"
+              + target.getQualifiedName().replace('.', '_')
+              + "Interface"
+              + uniqueIdSupplier.get();
+    }
+    return interfaceName;
   }
 }

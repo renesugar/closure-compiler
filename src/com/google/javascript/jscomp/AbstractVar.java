@@ -16,6 +16,8 @@
 
 package com.google.javascript.jscomp;
 
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 
 import com.google.common.collect.ImmutableSet;
@@ -26,6 +28,7 @@ import com.google.javascript.rhino.StaticRef;
 import com.google.javascript.rhino.StaticSlot;
 import com.google.javascript.rhino.StaticSourceFile;
 import com.google.javascript.rhino.Token;
+import javax.annotation.Nullable;
 
 /**
  * Used by {@code Scope} to store information about variables.
@@ -33,25 +36,39 @@ import com.google.javascript.rhino.Token;
 public class AbstractVar<S extends AbstractScope<S, V>, V extends AbstractVar<S, V>>
     extends ScopedName implements StaticSlot, StaticRef {
 
-  final String name;
+  private final String name;
 
   /** Var node */
-  final Node nameNode;
+  private final Node nameNode;
 
   /** Input source */
-  final CompilerInput input;
+  private final CompilerInput input;
 
   /**
-   * The index at which the var is declared. e.g. if it's 0, it's the first
-   * declared variable in that scope
+   * The index at which the var is declared. e.g. if it's 0, it's the first declared variable in
+   * that scope
    */
-  final int index;
+  private final int index;
 
-  /** The enclosing scope */
-  final S scope;
+  private final S scope;
 
-  AbstractVar(String name, Node nameNode, S scope, int index, CompilerInput input) {
-    this.name = name;
+  /**
+   * @param name The name of this var. Does not have to be semantically valid JS identifier.
+   * @param nameNode The node representing this variables declaration or null
+   * @param scope The scope containing this var
+   * @param index The index at which the var is declared in the scope. Must be either positive, or
+   *     -1 for implicit variables.
+   * @param input The compiler input containing the given nameNode, if any. May be null to allow for
+   *     declaring the native types in the type system.
+   */
+  AbstractVar(
+      String name,
+      @Nullable Node nameNode,
+      @Nullable S scope,
+      int index,
+      @Nullable CompilerInput input) {
+    checkArgument(index >= -1, index);
+    this.name = checkNotNull(name);
     this.nameNode = nameNode;
     this.scope = scope;
     this.index = index;
@@ -110,6 +127,14 @@ public class AbstractVar<S extends AbstractScope<S, V>, V extends AbstractVar<S,
     return scope;
   }
 
+  /**
+   * The index at which the var is declared. e.g. if it's 0, it's the first declared variable in
+   * that scope
+   */
+  int getIndex() {
+    return index;
+  }
+
   // Non-final for jsdev tests
   public boolean isGlobal() {
     return scope.isGlobal();
@@ -123,16 +148,14 @@ public class AbstractVar<S extends AbstractScope<S, V>, V extends AbstractVar<S,
     return input == null || input.isExtern();
   }
 
-  /**
-   * Returns {@code true} if the variable is declared as a constant,
-   * based on the value reported by {@code NodeUtil}.
-   */
-  public final boolean isInferredConst() {
+  /** Returns {@code true} if the variable is declared or inferred to be a constant. */
+  public final boolean isDeclaredOrInferredConst() {
     if (nameNode == null) {
       return false;
     }
 
-    return nameNode.getBooleanProp(Node.IS_CONSTANT_VAR)
+    return nameNode.isDeclaredConstantVar()
+        || nameNode.isInferredConstantVar()
         || nameNode.getBooleanProp(Node.IS_CONSTANT_NAME);
   }
 
@@ -198,6 +221,10 @@ public class AbstractVar<S extends AbstractScope<S, V>, V extends AbstractVar<S,
     return Var.ARGUMENTS.equals(name) && scope.isFunctionScope();
   }
 
+  final boolean isGoogModuleExports() {
+    return scope.isModuleScope() && "exports".equals(name) && isImplicit();
+  }
+
   public final boolean isThis() {
     return "this".equals(name) && scope.isFunctionScope();
   }
@@ -217,7 +244,7 @@ public class AbstractVar<S extends AbstractScope<S, V>, V extends AbstractVar<S,
       Token.IMPORT,
       Token.PARAM_LIST);
 
-  protected Token declarationType() {
+  final Token declarationType() {
     for (Node current = nameNode; current != null;
          current = current.getParent()) {
       if (DECLARATION_TYPES.contains(current.getToken())) {

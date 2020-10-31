@@ -42,9 +42,22 @@ public final class CheckSuspiciousCodeTest extends CompilerTestCase {
     enableParseTypeInfo();
   }
 
-  @Override
-  protected int getNumRepetitions() {
-    return 1;
+  @Test
+  public void suspiciousBreakingOutOfOptionalChain() {
+    setAcceptedLanguage(LanguageMode.UNSUPPORTED);
+    final DiagnosticType e = CheckSuspiciousCode.SUSPICIOUS_BREAKING_OUT_OF_OPTIONAL_CHAIN;
+
+    testSame("a?.b.c");
+    testWarning("(a?.b).c", e);
+
+    testSame("a.b?.[c][d]");
+    testWarning("(a.b?.[c])[d]", e);
+
+    testSame("a.b?.()()");
+    testWarning("(a.b?.())()", e);
+
+    testSame("a(b?.c);");
+    testSame("a[b?.c];");
   }
 
   @Test

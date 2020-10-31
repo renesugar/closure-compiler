@@ -45,7 +45,6 @@ import static com.google.javascript.rhino.testing.TypeSubject.assertType;
 import static com.google.javascript.rhino.testing.TypeSubject.types;
 
 import com.google.common.collect.Iterables;
-import com.google.javascript.rhino.ErrorReporter;
 import com.google.javascript.rhino.jstype.JSType;
 import java.util.Iterator;
 import org.junit.Assert;
@@ -64,12 +63,13 @@ public class Asserts {
 
   /** @return The resolved type */
   public static JSType assertValidResolve(JSType type) {
-    ErrorReporter reporter = TestErrorReporter.forNoExpectedReports();
+    TestErrorReporter reporter = new TestErrorReporter();
     JSType resolvedType = type.resolve(reporter);
     assertWithMessage("JSType#resolve should not affect object equality")
         .about(types())
         .that(resolvedType)
-        .isStructurallyEqualTo(type);
+        .isEqualTo(type);
+    reporter.verifyHasEncounteredAllWarningsAndErrors();
     return resolvedType;
   }
 
@@ -79,7 +79,7 @@ public class Asserts {
     Iterator<T> aIterator = a.iterator();
     Iterator<S> bIterator = b.iterator();
     while (aIterator.hasNext()) {
-      assertType(bIterator.next()).isStructurallyEqualTo(aIterator.next());
+      assertType(bIterator.next()).isEqualTo(aIterator.next());
     }
   }
 
@@ -88,28 +88,53 @@ public class Asserts {
    * should have trivial solutions (getGreatestSubtype, isEquivalentTo, etc)
    */
   public static void assertEquivalenceOperations(JSType a, JSType b) {
-    assertType(a).isStructurallyEqualTo(a);
-    assertType(b).isStructurallyEqualTo(a);
-    assertType(b).isStructurallyEqualTo(b);
+    assertType(a).isEqualTo(a);
+    assertType(b).isEqualTo(a);
+    assertType(b).isEqualTo(b);
 
     Assert.assertTrue(a.isSubtypeOf(b));
     Assert.assertTrue(a.isSubtypeOf(a));
     Assert.assertTrue(b.isSubtypeOf(b));
     Assert.assertTrue(b.isSubtypeOf(a));
 
-    assertType(a.getGreatestSubtype(b)).isStructurallyEqualTo(a);
-    assertType(a.getGreatestSubtype(a)).isStructurallyEqualTo(a);
-    assertType(b.getGreatestSubtype(b)).isStructurallyEqualTo(a);
-    assertType(b.getGreatestSubtype(a)).isStructurallyEqualTo(a);
+    assertType(a.getGreatestSubtype(b)).isEqualTo(a);
+    assertType(a.getGreatestSubtype(a)).isEqualTo(a);
+    assertType(b.getGreatestSubtype(b)).isEqualTo(a);
+    assertType(b.getGreatestSubtype(a)).isEqualTo(a);
 
-    assertType(a.getLeastSupertype(b)).isStructurallyEqualTo(a);
-    assertType(a.getLeastSupertype(a)).isStructurallyEqualTo(a);
-    assertType(b.getLeastSupertype(b)).isStructurallyEqualTo(a);
-    assertType(b.getLeastSupertype(a)).isStructurallyEqualTo(a);
+    assertType(a.getLeastSupertype(b)).isEqualTo(a);
+    assertType(a.getLeastSupertype(a)).isEqualTo(a);
+    assertType(b.getLeastSupertype(b)).isEqualTo(a);
+    assertType(b.getLeastSupertype(a)).isEqualTo(a);
 
     Assert.assertTrue(a.canCastTo(b));
     Assert.assertTrue(a.canCastTo(a));
     Assert.assertTrue(b.canCastTo(b));
     Assert.assertTrue(b.canCastTo(a));
+  }
+
+  /**
+   * Assert that the given function throws a particular throwable. This method is inspired by a
+   * similar API in JUnit 4.13, but the compiler is currently pinned on 4.12, which doesn't include
+   * it.
+   */
+  @SuppressWarnings("unchecked")
+  public static <T extends Throwable> T assertThrows(
+      Class<T> exceptionClass, ThrowingRunnable runnable) {
+    try {
+      runnable.run();
+    } catch (Throwable expectedException) {
+      assertThat(expectedException).isInstanceOf(exceptionClass);
+      return (T) expectedException; // Unchecked cast. J2CL doesn't support `Class::cast`.
+    }
+
+    assertWithMessage("Did not get expected exception: %s", exceptionClass).fail();
+    throw new AssertionError("Impossible");
+  }
+
+  /** Functional interface for use with {@link #assertThrows}. */
+  @FunctionalInterface
+  public static interface ThrowingRunnable {
+    void run() throws Throwable;
   }
 }

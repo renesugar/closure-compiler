@@ -41,7 +41,6 @@ import java.util.Set;
  * individual variables.
  *
  * Based on the InlineVariables pass
- *
  */
 class InlineObjectLiterals implements CompilerPass {
 
@@ -61,8 +60,9 @@ class InlineObjectLiterals implements CompilerPass {
 
   @Override
   public void process(Node externs, Node root) {
-    ReferenceCollectingCallback callback = new ReferenceCollectingCallback(
-        compiler, new InliningBehavior(), new Es6SyntacticScopeCreator(compiler));
+    ReferenceCollectingCallback callback =
+        new ReferenceCollectingCallback(
+            compiler, new InliningBehavior(), new SyntacticScopeCreator(compiler));
     callback.process(externs, root);
   }
 
@@ -89,7 +89,7 @@ class InlineObjectLiterals implements CompilerPass {
         ReferenceCollection referenceInfo = referenceMap.getReferences(v);
 
         if (isInlinableObject(referenceInfo.references)) {
-          // Blacklist the object itself, as well as any other values
+          // Skiplist the object itself, as well as any other values
           // that it refers to, since they will have been moved around.
           staleVars.add(v);
 
@@ -103,12 +103,11 @@ class InlineObjectLiterals implements CompilerPass {
     }
 
     /**
-     * If there are any variable references in the given node tree,
-     * blacklist them to prevent the pass from trying to inline the
-     * variable. Any code modifications will have potentially made the
-     * ReferenceCollection invalid.
+     * If there are any variable references in the given node tree, skiplist them to prevent the
+     * pass from trying to inline the variable. Any code modifications will have potentially made
+     * the ReferenceCollection invalid.
      */
-    private void blacklistVarReferencesInTree(Node root, final Scope scope) {
+    private void recordStaleVarReferencesInTree(Node root, final Scope scope) {
       NodeUtil.visitPreOrder(root, new NodeUtil.Visitor() {
         @Override
         public void visit(Node node) {
@@ -135,10 +134,10 @@ class InlineObjectLiterals implements CompilerPass {
 
       return var.isGlobal()
           || var.isExtern()
-          || compiler.getCodingConvention().isExported(var.name)
+          || compiler.getCodingConvention().isExported(var.getName())
           || compiler
               .getCodingConvention()
-              .isPropertyRenameFunction(var.nameNode.getQualifiedName())
+              .isPropertyRenameFunction(var.getNameNode().getQualifiedName())
           || staleVars.contains(var);
     }
 
@@ -228,14 +227,24 @@ class InlineObjectLiterals implements CompilerPass {
         // Also, ES5 getters/setters aren't handled by this pass.
         for (Node child = val.getFirstChild(); child != null;
              child = child.getNext()) {
-          if (child.isGetterDef() || child.isSetterDef()) {
-            // ES5 get/set not supported.
-            return false;
-          }
+          switch (child.getToken()) {
+              // ES5 get/set not supported.
+            case GETTER_DEF:
+            case SETTER_DEF:
+              // Don't inline computed property names
+            case COMPUTED_PROP:
+              // Spread can overwrite any preceding prop if there are matching keys.
+              // TODO(b/126567617): Allow inlining props declared after the SPREAD.
+            case OBJECT_SPREAD:
+              return false;
 
-          // Don't inline computed property names
-          if (child.isComputedProp()) {
-            return false;
+            case MEMBER_FUNCTION_DEF:
+            case STRING_KEY:
+              break;
+
+            default:
+              throw new IllegalStateException(
+                  "Unexpected child of OBJECTLIT: " + child.toStringTree());
           }
 
           validProperties.add(child.getString());
@@ -345,7 +354,7 @@ class InlineObjectLiterals implements CompilerPass {
       // Compute all of the assignments necessary
       List<Node> nodes = new ArrayList<>();
       Node val = ref.getAssignedValue();
-      blacklistVarReferencesInTree(val, v.scope);
+      recordStaleVarReferencesInTree(val, v.getScope());
       checkState(val.isObjectLit(), val);
       Set<String> all = new LinkedHashSet<>(varmap.keySet());
       for (Node key = val.getFirstChild(); key != null;
@@ -423,10 +432,14 @@ class InlineObjectLiterals implements CompilerPass {
       if (defined) {
         vnode = init.getParent();
         fillInitialValues(init, initvals);
+      } else if (v.getParentNode().isLet() || v.getParentNode().isConst()) {
+        // Find the beginning of the current scope.
+        vnode = v.getScope().getRootNode().getFirstChild();
       } else {
         // Find the beginning of the function body / script.
         vnode = v.getScope().getClosestHoistScope().getRootNode().getFirstChild();
       }
+
       checkState(NodeUtil.isStatement(vnode), vnode);
 
       for (Map.Entry<String, String> entry : varmap.entrySet()) {
@@ -436,7 +449,7 @@ class InlineObjectLiterals implements CompilerPass {
           // is this right?
           newVarNode.useSourceInfoIfMissingFromForTree(vnode);
         } else {
-          blacklistVarReferencesInTree(val, v.scope);
+          recordStaleVarReferencesInTree(val, v.getScope());
         }
         vnode.getParent().addChildBefore(newVarNode, vnode);
         compiler.reportChangeToEnclosingScope(vnode);

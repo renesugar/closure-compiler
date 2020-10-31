@@ -40,8 +40,6 @@ import java.util.Map;
  * GETPROP access of a property B on some object inside of a method named A.
  *
  * <p>Global functions are also represented by nodes in this graph, with similar semantics.
- *
- * @author nicksantos@google.com (Nick Santos)
  */
 class AnalyzePrototypeProperties implements CompilerPass {
 
@@ -251,22 +249,53 @@ class AnalyzePrototypeProperties implements CompilerPass {
     @Override
     public void visit(NodeTraversal t, Node n, Node parent) {
       switch (n.getToken()) {
+        case SUPER:
+          // Example:
+          // class X extends Y {
+          //   method() {
+          //     return () => super.x;
+          //   }
+          // }
+          // Names associated with the arrow function, the method body, and the method itself
+          // should be marked as referencing super, but not the class definition or anything
+          // containing it.
+          for (NameContext context : symbolStack) {
+            context.name.referencesSuper = true;
+            if (NodeUtil.isMethodDeclaration(context.scope.getRootNode())) {
+              break;
+            }
+          }
+          break;
+
+        case OPTCHAIN_GETPROP:
+          addSymbolUse(n.getSecondChild().getString(), t.getModule(), PROPERTY);
+          break;
+
         case GETPROP:
           String propName = n.getSecondChild().getString();
 
           if (n.isQualifiedName()) {
             if (propName.equals("prototype")) {
-              if (processPrototypeRef(t, n)) {
+              if (handlePossibleAssignmentToPrototype(t, n)) {
+                // The reference is being assigned to not read from, so don't record this as a
+                // reference.
                 return;
               }
             } else if (compiler.getCodingConvention().isExported(propName)) {
+              // TODO(bradfordcsmith): We don't seem to have any tests that cover this case.
+              // This class has no unit tests of its own and it is only used by
+              // CrossChunkMethodMotion.
               addGlobalUseOfSymbol(propName, t.getModule(), PROPERTY);
               return;
             } else {
-              // Do not mark prototype prop assigns as a 'use' in the global scope.
               if (parent.isAssign() && n == parent.getFirstChild()) {
                 String rValueName = getPrototypePropertyNameFromRValue(n);
                 if (rValueName != null) {
+                  // e.g. `Foo.prototype.bar = something`
+                  // We record the declaration of `bar` when we look at the `Foo.prototype`
+                  // Node via the call to handlePossibleAssignmentToPrototype() above.
+                  // Now that we're looking at the whole `Foo.prototype.bar` node,
+                  // we just need to make sure we don't record it as a read reference.
                   return;
                 }
               }
@@ -285,15 +314,32 @@ class AnalyzePrototypeProperties implements CompilerPass {
             return;
           }
 
-          // var x = {a: 1, b: 2}
+          // Fall through.
+        case OBJECT_PATTERN:
+          // `var x = {a: 1, b: 2}` and `var {a: x, b: y} = obj;`
           // should count as a use of property a and b.
-          for (Node propNameNode = n.getFirstChild();
-              propNameNode != null;
-              propNameNode = propNameNode.getNext()) {
-            // May be STRING, GET, or SET, but NUMBER isn't interesting.
-            // Also ignore computed properties
-            if (!propNameNode.isQuotedString() && !propNameNode.isComputedProp()) {
-              addSymbolUse(propNameNode.getString(), t.getModule(), PROPERTY);
+          for (Node propNode = n.getFirstChild(); propNode != null; propNode = propNode.getNext()) {
+            switch (propNode.getToken()) {
+              case COMPUTED_PROP:
+              case ITER_REST:
+              case OBJECT_REST:
+              case ITER_SPREAD:
+              case OBJECT_SPREAD:
+                break;
+
+              case STRING_KEY:
+              case GETTER_DEF:
+              case SETTER_DEF:
+              case MEMBER_FUNCTION_DEF:
+                if (!propNode.isQuotedString()) {
+                  // May be STRING, GET, or SET, but NUMBER isn't interesting.
+                  addSymbolUse(propNode.getString(), t.getModule(), PROPERTY);
+                }
+                break;
+
+              default:
+                throw new IllegalStateException(
+                    "Unexpected child of " + n.getToken() + ": " + propNode.toStringTree());
             }
           }
           break;
@@ -303,17 +349,6 @@ class AnalyzePrototypeProperties implements CompilerPass {
           for (Node child = classMembers.getFirstChild(); child != null; child = child.getNext()) {
             if (child.isMemberFunctionDef() || child.isSetterDef() || child.isGetterDef()) {
               processMemberDef(t, child);
-            }
-          }
-          break;
-
-        case OBJECT_PATTERN:
-          for (Node stringKeyNode = n.getFirstChild();
-              stringKeyNode != null;
-              stringKeyNode = stringKeyNode.getNext()) {
-            if (!stringKeyNode.isComputedProp() && !stringKeyNode.isQuotedString()) {
-              // skip over const {['foobar']: foo} = ...; and const {'foobar': foo} = ...;
-              addSymbolUse(stringKeyNode.getString(), t.getModule(), PROPERTY);
             }
           }
           break;
@@ -464,12 +499,17 @@ class AnalyzePrototypeProperties implements CompilerPass {
     }
 
     /**
-     * Processes the GETPROP of prototype, which can either be under another GETPROP (in the case of
-     * Foo.prototype.bar), or can be under an assignment (in the case of Foo.prototype = ...).
+     * Examines a qualified name ending in `.prototype`.
      *
+     * <p>If it is part of an assignment like `foo.prototype = {}` or `foo.prototype.bar = x`,
+     * record this reference as the definition of one or more prototype properties and return
+     * `true`.
+     *
+     * @param t
+     * @param ref A reference to some qualified name that ends with `.prototype`
      * @return True if a declaration was added.
      */
-    private boolean processPrototypeRef(NodeTraversal t, Node ref) {
+    private boolean handlePossibleAssignmentToPrototype(NodeTraversal t, Node ref) {
       Node root = NodeUtil.getRootOfQualifiedName(ref);
 
       Node n = ref.getParent();
@@ -524,8 +564,11 @@ class AnalyzePrototypeProperties implements CompilerPass {
         return;
       }
 
-      String className = NodeUtil.getName(n.getGrandparent());
-      Var var = t.getScope().getVar(className);
+      Node classNameNode = NodeUtil.getNameNode(n.getGrandparent());
+      Var var =
+          (classNameNode != null && classNameNode.isName())
+              ? t.getScope().getVar(classNameNode.getString())
+              : null;
       getNameInfoForName(name, PROPERTY)
           .getDeclarations()
           .add(new ClassMemberFunction(n, var, t.getModule()));
@@ -546,6 +589,27 @@ class AnalyzePrototypeProperties implements CompilerPass {
       if (n.isGetProp()) {
         symbolGraph.connect(
             externNode, firstModule, getNameInfoForName(n.getLastChild().getString(), PROPERTY));
+      } else if (n.isMemberFunctionDef() || n.isGetterDef() || n.isSetterDef()) {
+        // As of 2019-08-29 the only user of this class is CrossChunkMethodMotion, which never
+        // moves static methods, but that could change. So, we're intentionally including static
+        // methods, static getters, and static setters here, because there are cases where they
+        // could act like prototype properties.
+        //
+        // e.g.
+        // // externs.js
+        // class Foo {
+        //   static foo() {}
+        // }
+        //
+        // // src.js
+        // /** @record */
+        // class ObjWithFooMethod {
+        //   foo() {}
+        // }
+        // /** @type {!ObjWithFooMethod} */
+        // let objWithFooMethod = Foo; // yes, this is valid
+        //
+        symbolGraph.connect(externNode, firstModule, getNameInfoForName(n.getString(), PROPERTY));
       }
     }
   }
@@ -564,10 +628,6 @@ class AnalyzePrototypeProperties implements CompilerPass {
       return false;
     }
   }
-
-  // TODO(user): We can use DefinitionsRemover and UseSite here. Then all
-  // we need to do is call getDefinition() and we'll magically know everything
-  // about the definition.
 
   /** The declaration of an abstract symbol. */
   interface Symbol {
@@ -791,6 +851,10 @@ class AnalyzePrototypeProperties implements CompilerPass {
     // outer scope which isn't the global scope.
     private boolean readClosureVariables = false;
 
+    // does the definition refer to `super`?
+    // We cannot move references to `super` outside of the class body.
+    private boolean referencesSuper = false;
+
     /**
      * Constructs a new NameInfo.
      *
@@ -814,6 +878,11 @@ class AnalyzePrototypeProperties implements CompilerPass {
     /** Determines whether it reads a closure variable. */
     boolean readsClosureVariables() {
       return readClosureVariables;
+    }
+
+    /** Does the definition refer to `super`? */
+    boolean referencesSuper() {
+      return referencesSuper;
     }
 
     /**

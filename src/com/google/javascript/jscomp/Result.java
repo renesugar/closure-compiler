@@ -18,6 +18,7 @@ package com.google.javascript.jscomp;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -33,7 +34,7 @@ public class Result {
   public final VariableMap propertyMap;
   public final VariableMap namedAnonFunctionMap;
   public final VariableMap stringMap;
-  public final FunctionInformationMap functionInformationMap;
+  public final VariableMap instrumentationMappings;
   public final SourceMap sourceMap;
   public final Map<String, Integer> cssNames;
   public final String externExport;
@@ -47,7 +48,7 @@ public class Result {
       VariableMap propertyMap,
       VariableMap namedAnonFunctionMap,
       VariableMap stringMap,
-      FunctionInformationMap functionInformationMap,
+      VariableMap instrumentationMappings,
       SourceMap sourceMap,
       String externExport,
       Map<String, Integer> cssNames,
@@ -60,7 +61,7 @@ public class Result {
     this.propertyMap = propertyMap;
     this.namedAnonFunctionMap = namedAnonFunctionMap;
     this.stringMap = stringMap;
-    this.functionInformationMap = functionInformationMap;
+    this.instrumentationMappings = instrumentationMappings;
     this.sourceMap = sourceMap;
     this.externExport = externExport;
     this.cssNames = cssNames;
@@ -69,17 +70,50 @@ public class Result {
   }
 
   @VisibleForTesting
+  @Deprecated
   public Result(
       ImmutableList<JSError> errors,
       ImmutableList<JSError> warnings,
       VariableMap variableMap,
       VariableMap propertyMap,
       VariableMap namedAnonFunctionMap,
-      FunctionInformationMap functionInformationMap,
       SourceMap sourceMap,
       String externExport) {
-    this(errors, warnings, variableMap, propertyMap,
-         namedAnonFunctionMap, null, functionInformationMap, sourceMap,
-         externExport, null, null, null);
+    this(
+        errors,
+        warnings,
+        variableMap,
+        propertyMap,
+        namedAnonFunctionMap,
+        /* stringMap= */ null,
+        /* instrumentationMappings= */ null,
+        sourceMap,
+        externExport,
+        /* cssNames= */ null,
+        /* idGeneratorMap= */ null,
+        /* transpiledFiles= */ null);
+  }
+
+  /**
+   * Returns an almost empty result that is used for multistage compilation.
+   *
+   * <p>For multistage compilations, Result for stage1 only cares about errors and warnings. It is
+   * unnecessary to write all of other results in the disk.
+   */
+  public static Result createResultForStage1(Result result) {
+    VariableMap emptyVariableMap = new VariableMap(ImmutableMap.of());
+    return new Result(
+        /* errors= */ result.errors,
+        /* warnings= */ result.warnings,
+        /* variableMap= */ emptyVariableMap,
+        /* propertyMap= */ emptyVariableMap,
+        /* namedAnonFunctionMap= */ emptyVariableMap,
+        /* stringMap= */ null,
+        /* instrumentationMappings= */ emptyVariableMap,
+        /* sourceMap= */ null,
+        /* externExport= */ "",
+        /* cssNames= */ null,
+        /* idGeneratorMap= */ null,
+        /* transpiledFiles= */ null);
   }
 }

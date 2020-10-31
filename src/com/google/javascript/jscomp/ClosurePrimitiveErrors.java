@@ -20,6 +20,16 @@ final class ClosurePrimitiveErrors {
 
   private ClosurePrimitiveErrors() {}
 
+  static final DiagnosticType DUPLICATE_MODULE =
+      DiagnosticType.error(
+          "JSC_DUPLICATE_MODULE",
+          "Duplicate module: {0}. Module already declared in other file {1}");
+
+  static final DiagnosticType DUPLICATE_NAMESPACE =
+      DiagnosticType.error(
+          "JSC_DUPLICATE_NAMESPACE",
+          "Duplicate namespace: {0}. Namespace already provided in other file {1}");
+
   static final DiagnosticType INVALID_DESTRUCTURING_FORWARD_DECLARE =
       DiagnosticType.error(
           "JSC_INVALID_DESTRUCTURING_FORWARD_DECLARE",
@@ -55,6 +65,11 @@ final class ClosurePrimitiveErrors {
       DiagnosticType.error(
           "JSC_MISSING_MODULE_OR_PROVIDE", "Required namespace \"{0}\" never defined.");
 
+  static final DiagnosticType MISSING_MODULE_OR_PROVIDE_FOR_FORWARD_DECLARE =
+      DiagnosticType.error(
+          "JSC_MISSING_MODULE_OR_PROVIDE_FOR_FORWARD_DECLARE",
+          "Required namespace \"{0}\" never defined.");
+
   static final DiagnosticType INVALID_GET_CALL_SCOPE =
       DiagnosticType.error(
           "JSC_GOOG_MODULE_INVALID_GET_CALL_SCOPE",
@@ -64,5 +79,5 @@ final class ClosurePrimitiveErrors {
       DiagnosticType.error(
           "JSC_INVALID_CLOSURE_CALL_ERROR",
           "Closure primitive methods (goog.provide, goog.require, goog.define, etc) must be called "
-              + " at file scope.");
+              + "at file scope.");
 }

@@ -16,7 +16,7 @@
 
 /**
  * @fileoverview Definitions for W3C's Trusted Types specification.
- * @see https://github.com/WICG/trusted-types
+ * @see https://w3c.github.io/webappsec-trusted-types/dist/spec/
  * @externs
  */
 
@@ -24,17 +24,17 @@
 /** @constructor */
 function TrustedHTML() {}
 
-/** @constructor */
-function TrustedScript() {}
+// function TrustedScript() was moved to `es3.js` so that is could be used by
+// `eval()`.
 
 /** @constructor */
 function TrustedScriptURL() {}
 
-/** @constructor */
-function TrustedURL() {}
 
-
-/** @constructor */
+/**
+ * @template Options
+ * @constructor
+ */
 function TrustedTypePolicy() {}
 
 /**
@@ -55,38 +55,85 @@ TrustedTypePolicy.prototype.createScript = function(s) {};
  */
 TrustedTypePolicy.prototype.createScriptURL = function(s) {};
 
-/**
- * @param {string} s
- * @return {!TrustedURL}
- */
-TrustedTypePolicy.prototype.createURL = function(s) {};
-
 
 /** @constructor */
 function TrustedTypePolicyFactory() {}
 
+/** @record @private */
+function TrustedTypePolicyOptions() {};
+
 /**
- * @param {string} name
- * @param {{
- *     createHTML: function(string): string,
- *     createScript: function(string): string,
- *     createScriptURL: function(string): string,
- *     createURL: function(string): string}} policy
- * @param {boolean=} opt_expose
- * @return {!TrustedTypePolicy}
+ *  @type {(function(string, ...*): string)|undefined},
  */
-TrustedTypePolicyFactory.prototype.createPolicy = function(
-    name, policy, opt_expose) {};
+TrustedTypePolicyOptions.prototype.createHTML;
+
+/**
+ *  @type {(function(string, ...*): string)|undefined},
+ */
+TrustedTypePolicyOptions.prototype.createScript;
+
+/**
+ *  @type {(function(string, ...*): string)|undefined},
+ */
+TrustedTypePolicyOptions.prototype.createScriptURL;
+
 
 /**
  * @param {string} name
+ * @param {!TrustedTypePolicyOptions} policy
  * @return {!TrustedTypePolicy}
  */
-TrustedTypePolicyFactory.prototype.getExposedPolicy = function(name) {};
+TrustedTypePolicyFactory.prototype.createPolicy = function(name, policy) {};
 
-/** @return {!Array<string>} */
-TrustedTypePolicyFactory.prototype.getPolicyNames = function() {};
+
+/**
+ * @param {*} obj
+ * @return {boolean}
+ */
+TrustedTypePolicyFactory.prototype.isHTML = function(obj) {};
+
+/**
+ * @param {*} obj
+ * @return {boolean}
+ */
+TrustedTypePolicyFactory.prototype.isScript = function(obj) {};
+
+/**
+ * @param {*} obj
+ * @return {boolean}
+ */
+TrustedTypePolicyFactory.prototype.isScriptURL = function(obj) {};
+
+
+/** @type {!TrustedHTML} */
+TrustedTypePolicyFactory.prototype.emptyHTML;
+
+
+/** @type {!TrustedScript} */
+TrustedTypePolicyFactory.prototype.emptyScript;
+
+/**
+ * @param {string} tagName
+ * @param {string} attribute
+ * @param {string=} elementNs
+ * @param {string=} attrNs
+ * @return {?string}
+ */
+TrustedTypePolicyFactory.prototype.getAttributeType = function(
+    tagName, attribute, elementNs, attrNs) {};
+
+/**
+ * @param {string} tagName
+ * @param {string} property
+ * @param {string=} elementNs
+ * @return {?string}
+ */
+TrustedTypePolicyFactory.prototype.getPropertyType = function(
+    tagName, property, elementNs) {};
+
+/** @type {?TrustedTypePolicy} */
+TrustedTypePolicyFactory.prototype.defaultPolicy;
 
 
 /** @type {!TrustedTypePolicyFactory} */
-var TrustedTypes;
+var trustedTypes;

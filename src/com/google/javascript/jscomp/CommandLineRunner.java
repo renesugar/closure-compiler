@@ -22,6 +22,7 @@ import com.google.common.annotations.GwtIncompatible;
 import com.google.common.base.Ascii;
 import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
@@ -29,6 +30,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
 import com.google.common.io.Files;
 import com.google.javascript.jscomp.AbstractCommandLineRunner.CommandLineConfig.ErrorFormatOption;
+import com.google.javascript.jscomp.CompilerOptions.InstrumentOption;
 import com.google.javascript.jscomp.CompilerOptions.IsolationMode;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.DependencyOptions.DependencyMode;
@@ -53,6 +55,7 @@ import java.io.StringWriter;
 import java.lang.reflect.AnnotatedElement;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
+import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
@@ -62,6 +65,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -80,7 +84,6 @@ import org.kohsuke.args4j.CmdLineParser;
 import org.kohsuke.args4j.NamedOptionDef;
 import org.kohsuke.args4j.Option;
 import org.kohsuke.args4j.OptionDef;
-import org.kohsuke.args4j.OptionHandlerFilter;
 import org.kohsuke.args4j.spi.FieldSetter;
 import org.kohsuke.args4j.spi.IntOptionHandler;
 import org.kohsuke.args4j.spi.OptionHandler;
@@ -123,8 +126,6 @@ import org.kohsuke.args4j.spi.StringOptionHandler;
  * </pre>
  *
  * This class is totally not thread-safe.
- *
- * @author bolinfest@google.com (Michael Bolin)
  */
 @GwtIncompatible("Unnecessary")
 public class CommandLineRunner extends
@@ -139,36 +140,6 @@ public class CommandLineRunner extends
   // Allowable chunk name characters that aren't valid in a JS identifier
   private static final Pattern extraChunkNameChars = Pattern.compile("[-.]+");
 
-  // The set of allowed values for the --dependency_mode flag.
-  // TODO(tjgq): Remove this once we no longer support STRICT and LOOSE.
-  private enum DependencyModeFlag {
-    NONE,
-    SORT_ONLY,
-    PRUNE_LEGACY,
-    PRUNE,
-    LOOSE,
-    STRICT;
-
-    private static DependencyMode toDependencyMode(DependencyModeFlag flag) {
-      if (flag == null) {
-        return null;
-      }
-      switch (flag) {
-        case NONE:
-          return DependencyMode.NONE;
-        case SORT_ONLY:
-          return DependencyMode.SORT_ONLY;
-        case PRUNE_LEGACY:
-        case LOOSE:
-          return DependencyMode.PRUNE_LEGACY;
-        case PRUNE:
-        case STRICT:
-          return DependencyMode.PRUNE;
-      }
-      throw new AssertionError("Bad DependencyModeFlag");
-    }
-  }
-
   // I don't really care about unchecked warnings in this class.
   @SuppressWarnings("unchecked")
   private static class Flags {
@@ -179,6 +150,14 @@ public class CommandLineRunner extends
         Collections.synchronizedList(new ArrayList<FlagEntry<CheckLevel>>());
     private static final List<FlagEntry<JsSourceType>> mixedJsSources =
         Collections.synchronizedList(new ArrayList<FlagEntry<JsSourceType>>());
+
+    @Option(
+        name = "--browser_featureset_year",
+        usage =
+            "shortcut for defining "
+                + "goog.FEATURESET_YEAR=YYYY."
+                + " The minimum valid value of the browser year is 2012")
+    private Integer browserFeaturesetYear = 0;
 
     @Option(
       name = "--help",
@@ -293,6 +272,14 @@ public class CommandLineRunner extends
         + "renaming map produced should be saved")
     private String variableMapOutputFile = "";
 
+    @Option(
+        name = "--instrument_mapping_report",
+        usage =
+            "File where the encoded parameters created by Production "
+                + "Instrumentation are mapped to their pre-encoded values. Must "
+                + "be used in tandem with --instrument_for_coverage_option=PRODUCTION")
+    private String instrumentationMappingOutputFile = "";
+
     @Option(name = "--create_renaming_reports",
         hidden = true,
         handler = BooleanOptionHandler.class,
@@ -329,10 +316,12 @@ public class CommandLineRunner extends
         + "3 (always print summary). The default level is 1")
     private int summaryDetailLevel = 1;
 
-    @Option(name = "--isolation_mode",
-        usage = "If set to IIFE the compiler output will follow the form:\n"
-        + "  (function(){%output%)).call(this);\n"
-        + "Options: NONE, IIFE")
+    @Option(
+        name = "--isolation_mode",
+        usage =
+            "If set to IIFE the compiler output will follow the form:\n"
+                + "  (function(){%output%}).call(this);\n"
+                + "Options: NONE, IIFE")
     private IsolationMode isolationMode = IsolationMode.NONE;
 
     @Option(
@@ -655,6 +644,12 @@ public class CommandLineRunner extends
     private String j2clPassMode = "AUTO";
 
     @Option(
+        name = "--remove_j2cl_asserts",
+        hidden = true,
+        usage = "Remove calls to J2CL assertions.")
+    private boolean removeJ2cLAsserts = true;
+
+    @Option(
         name = "--output_manifest",
         usage =
             "Prints out a list of all the files in the compilation. "
@@ -675,8 +670,10 @@ public class CommandLineRunner extends
         usage =
             "Sets the language spec to which input sources should conform. "
                 + "Options: ECMASCRIPT3, ECMASCRIPT5, ECMASCRIPT5_STRICT, "
-                + "ECMASCRIPT6_TYPED (experimental), ECMASCRIPT_2015, ECMASCRIPT_2016, "
-                + "ECMASCRIPT_2017, ECMASCRIPT_2018, STABLE, ECMASCRIPT_NEXT")
+                + "ECMASCRIPT_2015, ECMASCRIPT_2016, "
+                + "ECMASCRIPT_2017, ECMASCRIPT_2018, ECMASCRIPT_2019, ECMASCRIPT_2020, STABLE, "
+                + "ECMASCRIPT_NEXT (latest features supported),"
+                + "ECMASCRIPT_NEXT_IN (latest features supported for input, but not output yet)")
     private String languageIn = "STABLE";
 
     @Option(
@@ -684,9 +681,9 @@ public class CommandLineRunner extends
         usage =
             "Sets the language spec to which output should conform. "
                 + "Options: ECMASCRIPT3, ECMASCRIPT5, ECMASCRIPT5_STRICT, "
-                + "ECMASCRIPT_2015, STABLE")
+                + "ECMASCRIPT_2015, ECMASCRIPT_2016, ECMASCRIPT_2017, "
+                + "ECMASCRIPT_2018, ECMASCRIPT_2019, STABLE")
     private String languageOut = "STABLE";
-
 
     @Option(
         name = "--version",
@@ -711,19 +708,23 @@ public class CommandLineRunner extends
         usage = "A file (or files) containing additional command-line options.")
     private List<String> flagFiles = new ArrayList<>();
 
-    @Option(name = "--warnings_whitelist_file",
-        usage = "A file containing warnings to suppress. Each line should be "
-            + "of the form\n"
-            + "<file-name>:<line-number>?  <warning-description>")
-    private String warningsWhitelistFile = "";
+    @Option(
+        name = "--warnings_allowlist_file",
+        usage =
+            "A file containing warnings to suppress. Each line should be "
+                + "of the form\n"
+                + "<file-name>:<line-number>?  <warning-description>",
+        aliases = {"--warnings_whitelist_file"})
+    private String warningsAllowlistFile = "";
 
     @Option(name = "--hide_warnings_for",
         usage = "If specified, files whose path contains this string will "
             + "have their warnings hidden. You may specify multiple.")
     private List<String> hideWarningsFor = new ArrayList<>();
 
-    @Option(name = "--extra_annotation_name",
-        usage = "A whitelist of tag names in JSDoc. You may specify multiple")
+    @Option(
+        name = "--extra_annotation_name",
+        usage = "A allowlist of tag names in JSDoc. You may specify multiple")
     private List<String> extraAnnotationName = new ArrayList<>();
 
     @Option(name = "--tracer_mode",
@@ -733,14 +734,6 @@ public class CommandLineRunner extends
         + "Options: ALL, AST_SIZE, RAW_SIZE, TIMING_ONLY, OFF")
     private CompilerOptions.TracerMode tracerMode =
         CompilerOptions.TracerMode.OFF;
-
-    @Option(
-      name = "--new_type_inf",
-      hidden = true,
-      handler = BooleanOptionHandler.class,
-      usage = "Deprecated.  Does nothing. Use jscomp_error=strictCheckTypes instead."
-    )
-    private boolean useNewTypeInference = false;
 
     @Option(name = "--rename_variable_prefix",
         usage = "Specifies a prefix that will be prepended to all variables.")
@@ -802,8 +795,7 @@ public class CommandLineRunner extends
                 + "are not modules will be automatically added as --entry_point entries. Defaults "
                 + "to PRUNE_LEGACY if entry points are defined, otherwise to NONE.")
     @Nullable
-    private DependencyModeFlag dependencyMode =
-        null; // so we can tell whether it was explicitly set
+    private DependencyMode dependencyMode = null; // so we can tell whether it was explicitly set
 
     @Option(
         name = "--entry_point",
@@ -819,12 +811,6 @@ public class CommandLineRunner extends
         handler = BooleanOptionHandler.class,
         usage = "Rewrite ES6 library calls to use polyfills provided by the compiler's runtime.")
     private boolean rewritePolyfills = true;
-
-    @Option(
-        name = "--allow_method_call_decomposing",
-        handler = BooleanOptionHandler.class,
-        usage = "This flag is a no-op.")
-    private boolean allowMethodCallDecomposing = true;
 
     @Option(
       name = "--print_source_after_each_pass",
@@ -877,6 +863,27 @@ public class CommandLineRunner extends
     )
     private boolean helpMarkdown = false;
 
+    @Option(
+        name = "--instrument_for_coverage_option",
+        usage =
+            "Enable code instrumentation to perform code coverage analysis. Options are:\n"
+                + " 1. NONE (default)\n"
+                + " 2. LINE - Instrument code by line.\n"
+                + " 3. BRANCH - Instrument code by branch.\n"
+                + " 4. PRODUCTION - Function Instrumentation on compiled JS code.\n")
+    private String instrumentForCoverageOption = "NONE";
+
+    @Option(
+        name = "--production_instrumentation_array_name",
+        usage =
+            "Name of the global array used by production instrumentation. The array name "
+                + "should be declared as an extern so it is not renamed by the compiler. A function"
+                + "that parses the global array should also be included. This flag is to be used in"
+                + "tandem with --instrument_code=PRODUCTION")
+    private String productionInstrumentationArrayName = "";
+
+    private InstrumentOption instrumentCodeParsed = InstrumentOption.NONE;
+
     @Argument
     private List<String> arguments = new ArrayList<>();
     private final CmdLineParser parser;
@@ -896,6 +903,14 @@ public class CommandLineRunner extends
         throw new CmdLineException(
             parser, "Bad value for --compilation_level: " + compilationLevel);
       }
+
+      instrumentCodeParsed =
+          InstrumentOption.fromString(Ascii.toUpperCase(instrumentForCoverageOption));
+      if (instrumentCodeParsed == null) {
+        throw new CmdLineException(
+            parser,
+            "Bad value for --instrument_for_coverage_option: " + instrumentForCoverageOption);
+      }
     }
 
     private static final ImmutableSet<String> gwtUnsupportedFlags =
@@ -903,6 +918,7 @@ public class CommandLineRunner extends
             "conformance_configs",
             "error_format",
             "warnings_whitelist_file",
+            "warnings_allowlist_file",
             "output_wrapper_file",
             "output_manifest",
             "output_chunk_dependencies",
@@ -939,7 +955,7 @@ public class CommandLineRunner extends
                     "jscomp_off",
                     "jscomp_warning",
                     "strict_mode_input",
-                    "warnings_whitelist_file"))
+                    "warnings_allowlist_file"))
             .putAll(
                 "Output",
                 ImmutableList.of(
@@ -991,6 +1007,7 @@ public class CommandLineRunner extends
                     "charset",
                     "checks_only",
                     "define",
+                    "browser_featureset_year",
                     "flagfile",
                     "help",
                     "third_party",
@@ -1063,18 +1080,13 @@ public class CommandLineRunner extends
             parser.printUsage(
                 stringWriter,
                 null,
-                new OptionHandlerFilter() {
-                  @Override
-                  public boolean select(OptionHandler optionHandler) {
-                    if (optionHandler.option instanceof NamedOptionDef) {
-                      return !optionHandler.option.hidden()
-                          && optionName.equals(
-                              ((NamedOptionDef) optionHandler.option)
-                                  .name()
-                                  .replaceFirst("^--", ""));
-                    }
-                    return false;
+                (optionHandler) -> {
+                  if (optionHandler.option instanceof NamedOptionDef) {
+                    return !optionHandler.option.hidden()
+                        && optionName.equals(
+                            ((NamedOptionDef) optionHandler.option).name().replaceFirst("^--", ""));
                   }
+                  return false;
                 });
             stringWriter.flush();
             String rawOptionUsage = stringWriter.toString();
@@ -1108,16 +1120,13 @@ public class CommandLineRunner extends
           parser.printUsage(
               outputStream,
               null,
-              new OptionHandlerFilter() {
-                @Override
-                public boolean select(OptionHandler optionHandler) {
-                  if (optionHandler.option instanceof NamedOptionDef) {
-                    return !optionHandler.option.hidden()
-                        && options.contains(
-                            ((NamedOptionDef) optionHandler.option).name().replaceFirst("^--", ""));
-                  }
-                  return false;
+              (optionHandler) -> {
+                if (optionHandler.option instanceof NamedOptionDef) {
+                  return !optionHandler.option.hidden()
+                      && options.contains(
+                          ((NamedOptionDef) optionHandler.option).name().replaceFirst("^--", ""));
                 }
+                return false;
               });
         }
 
@@ -1395,10 +1404,8 @@ public class CommandLineRunner extends
     }
   }
 
-  /**
-   * Set of options that can be used with the --formatting flag.
-   */
-  private static enum FormattingOption {
+  /** Set of options that can be used with the --formatting flag. */
+  public static enum FormattingOption {
     PRETTY_PRINT,
     PRINT_INPUT_DELIMITER,
     SINGLE_QUOTES
@@ -1577,6 +1584,13 @@ public class CommandLineRunner extends
     }
   }
 
+  protected final String getVersionText() {
+    return String.join(
+        "\n", //
+        "Closure Compiler (http://github.com/google/closure-compiler)",
+        "Version: " + ((String) inlineDefine_COMPILER_VERSION));
+  }
+
   private void initConfigFromFlags(String[] args, PrintStream out, PrintStream err) {
 
     errorStream = err;
@@ -1681,7 +1695,7 @@ public class CommandLineRunner extends
     try {
       dependencyOptions =
           DependencyOptions.fromFlags(
-              DependencyModeFlag.toDependencyMode(flags.dependencyMode),
+              flags.dependencyMode,
               flags.entryPoint,
               flags.closureEntryPoint,
               flags.commonJsEntryModule,
@@ -1695,19 +1709,11 @@ public class CommandLineRunner extends
       Flags.printShortUsageAfterErrors(errorStream);
     } else if (flags.displayHelp || flags.helpMarkdown) {
       flags.printUsage(out);
-    } else if (flags.version) {
-      out.println(
-          "Closure Compiler (http://github.com/google/closure-compiler)\n"
-              + "Version: "
-              + Compiler.getReleaseVersion()
-              + "\n"
-              + "Built on: "
-              + Compiler.getReleaseDate());
-      out.flush();
     } else {
       runCompiler = true;
 
       getCommandLineConfig()
+          .setPrintVersion(flags.version)
           .setPrintTree(flags.printTree)
           .setPrintAst(flags.printAst)
           .setPrintPassGraph(flags.printPassGraph)
@@ -1722,6 +1728,7 @@ public class CommandLineRunner extends
           .setVariableMapOutputFile(flags.variableMapOutputFile)
           .setCreateNameMapFiles(flags.createNameMapFiles)
           .setPropertyMapOutputFile(flags.propertyMapOutputFile)
+          .setInstrumentationMappingFile(flags.instrumentationMappingOutputFile)
           .setCodingConvention(conv)
           .setSummaryDetailLevel(flags.summaryDetailLevel)
           .setOutputWrapper(flags.outputWrapper)
@@ -1735,6 +1742,7 @@ public class CommandLineRunner extends
           .setApplyInputSourceMaps(applyInputSourceMaps)
           .setWarningGuards(Flags.guardLevels)
           .setDefine(flags.define)
+          .setBrowserFeaturesetYear(flags.browserFeaturesetYear)
           .setCharset(flags.charset)
           .setDependencyOptions(dependencyOptions)
           .setOutputManifest(ImmutableList.of(flags.outputManifest))
@@ -1744,7 +1752,7 @@ public class CommandLineRunner extends
           .setProcessCommonJSModules(flags.processCommonJsModules)
           .setModuleRoots(moduleRoots)
           .setTransformAMDToCJSModules(flags.transformAmdModules)
-          .setWarningsWhitelistFile(flags.warningsWhitelistFile)
+          .setWarningsAllowlistFile(flags.warningsAllowlistFile)
           .setHideWarningsFor(flags.hideWarningsFor)
           .setAngularPass(flags.angularPass)
           .setJsonStreamMode(flags.jsonStreamMode)
@@ -1755,9 +1763,8 @@ public class CommandLineRunner extends
   }
 
   @Override
-  protected void addWhitelistWarningsGuard(
-      CompilerOptions options, File whitelistFile) {
-    options.addWarningsGuard(WhitelistWarningsGuard.fromFile(whitelistFile));
+  protected void addAllowlistWarningsGuard(CompilerOptions options, File allowlistFile) {
+    options.addWarningsGuard(AllowlistWarningsGuard.fromFile(allowlistFile));
   }
 
   @Override
@@ -1801,7 +1808,6 @@ public class CommandLineRunner extends
         throw new FlagUsageException("Unknown language `" + flags.languageOut + "' specified.");
       }
     }
-
 
     options.setCodingConvention(new ClosureCodingConvention());
 
@@ -1881,6 +1887,8 @@ public class CommandLineRunner extends
       }
     }
 
+    options.removeJ2clAsserts = flags.removeJ2cLAsserts;
+
     options.renamePrefix = flags.renamePrefix;
 
     options.renamePrefixNamespace = flags.renamePrefixNamespace;
@@ -1943,6 +1951,29 @@ public class CommandLineRunner extends
       options.setVariableRenaming(VariableRenamingPolicy.OFF);
       options.setPropertyRenaming(PropertyRenamingPolicy.OFF);
     }
+
+    if (flags.instrumentCodeParsed == InstrumentOption.PRODUCTION
+        && Strings.isNullOrEmpty(flags.instrumentationMappingOutputFile)) {
+      throw new FlagUsageException(
+          "Expected --instrument_mapping_report to be set when "
+              + "--instrument_for_coverage_option is set to Production");
+    }
+
+    if (!Strings.isNullOrEmpty(flags.instrumentationMappingOutputFile)
+        && flags.instrumentCodeParsed != InstrumentOption.PRODUCTION) {
+      throw new FlagUsageException(
+          "Expected --instrument_for_coverage_option to be passed with PRODUCTION "
+              + "when --instrument_mapping_report is set");
+    }
+
+    if (Strings.isNullOrEmpty(flags.productionInstrumentationArrayName)
+        && flags.instrumentCodeParsed == InstrumentOption.PRODUCTION) {
+      throw new FlagUsageException(
+          "Expected --production_instrumentation_array_name to be set when "
+              + "--instrument_for_coverage_option is set to Production");
+    }
+    options.setInstrumentForCoverageOption(flags.instrumentCodeParsed);
+    options.setProductionInstrumentationArrayName(flags.productionInstrumentationArrayName);
 
     return options;
   }
@@ -2061,9 +2092,8 @@ public class CommandLineRunner extends
   private static List<String> findJsFiles(Collection<String> patterns, boolean sortAlphabetically)
       throws IOException {
     // A map from normalized absolute paths to original paths. We need to return original paths to
-    // support whitelist files that depend on them.
-    Map<String, String> allJsInputs = sortAlphabetically
-        ? new TreeMap<>() : new LinkedHashMap<>();
+    // support allowlist files that depend on them.
+    Map<String, String> allJsInputs = sortAlphabetically ? new TreeMap<>() : new LinkedHashMap<>();
     Set<String> excludes = new HashSet<>();
     for (String pattern : patterns) {
       if (!pattern.contains("*") && !pattern.startsWith("!")) {
@@ -2111,7 +2141,10 @@ public class CommandLineRunner extends
 
     final PathMatcher matcher = fs.getPathMatcher("glob:" + prefix + separator + pattern);
     java.nio.file.Files.walkFileTree(
-        fs.getPath(prefix), new SimpleFileVisitor<Path>() {
+        fs.getPath(prefix),
+        EnumSet.of(FileVisitOption.FOLLOW_LINKS),
+        Integer.MAX_VALUE,
+        new SimpleFileVisitor<Path>() {
           @Override
           public FileVisitResult visitFile(Path p, BasicFileAttributes attrs) {
             if (matcher.matches(p) || matcher.matches(p.normalize())) {

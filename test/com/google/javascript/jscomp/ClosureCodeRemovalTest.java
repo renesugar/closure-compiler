@@ -23,12 +23,17 @@ import org.junit.runners.JUnit4;
 /**
  * Tests for {@link ClosureCodeRemoval}
  *
- * @author robbyw@google.com (Robby Walker)
  */
 @RunWith(JUnit4.class)
 public final class ClosureCodeRemovalTest extends CompilerTestCase {
 
   private static final String EXTERNS = "var window;";
+
+  private static final String ASSERTIONS =
+      lines(
+          "const asserts = {};",
+          "/** @closurePrimitive {asserts.truthy} */",
+          "asserts.assert = function(...args) {};");
 
   public ClosureCodeRemovalTest() {
     super(EXTERNS);
@@ -78,13 +83,22 @@ public final class ClosureCodeRemovalTest extends CompilerTestCase {
   }
 
   @Test
-  public void testRemoveAbstract_annotation() {
+  public void testRemoveAbstractAssignmentOfEmptyFunction() {
     test(
         lines(
             "function Foo() {};",
             "/** @abstract */",
             "Foo.prototype.doSomething = function() {};"),
         "function Foo() {};");
+  }
+
+  @Test
+  public void testDoNotRemoveAbstractAssignmentOfFunctionCall() {
+    testSame(
+        lines(
+            "function Foo() {};",
+            "/** @abstract */",
+            "Foo.prototype.doSomething = (function() { /* return something fancy */ })();"));
   }
 
   @Test
@@ -127,6 +141,30 @@ public final class ClosureCodeRemovalTest extends CompilerTestCase {
   @Test
   public void testAssertionRemoval4() {
     test("var x = goog.asserts.assert();", "var x = void 0;");
+  }
+
+  @Test
+  public void testClosurePrimitiveAssertionRemoval1() {
+    enableTypeCheck();
+    test(ASSERTIONS + "var x = asserts.assert(y(), 'message');", ASSERTIONS + "var x = y();");
+  }
+
+  @Test
+  public void testClosurePrimitiveAssertionRemoval2() {
+    enableTypeCheck();
+    test(ASSERTIONS + "asserts.assert(y(), 'message');", ASSERTIONS);
+  }
+
+  @Test
+  public void testClosurePrimitiveAssertionRemoval3() {
+    enableTypeCheck();
+    test(ASSERTIONS + "asserts.assert();", ASSERTIONS);
+  }
+
+  @Test
+  public void testClosurePrimitiveAssertionRemoval4() {
+    enableTypeCheck();
+    test(ASSERTIONS + "var x = asserts.assert();", ASSERTIONS + "var x = void 0;");
   }
 
   @Test

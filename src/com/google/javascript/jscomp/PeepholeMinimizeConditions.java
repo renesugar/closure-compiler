@@ -44,11 +44,10 @@ class PeepholeMinimizeConditions
   private final boolean late;
 
   /**
-   * @param late When late is false, this mean we are currently running before
-   * most of the other optimizations. In this case we would avoid optimizations
-   * that would make the code harder to analyze (such as using string splitting,
-   * merging statements with commas, etc). When this is true, we would
-   * do anything to minimize for size.
+   * @param late When late is false, this mean we are currently running before most of the other
+   *     optimizations. In this case we would avoid optimizations that would make the code harder to
+   *     analyze (such as using string splitting, merging statements with commas, etc). When late is
+   *     true, we would do anything to minimize for size.
    */
   PeepholeMinimizeConditions(boolean late) {
     this.late = late;
@@ -121,7 +120,7 @@ class PeepholeMinimizeConditions
           && !maybeBreak.hasChildren()) {
 
         // Preserve the IF ELSE expression is there is one.
-        if (maybeIf.getChildCount() == 3) {
+        if (maybeIf.hasXChildren(3)) {
           block.replaceChild(maybeIf,
               maybeIf.getLastChild().detach());
         } else {
@@ -381,6 +380,13 @@ class PeepholeMinimizeConditions
    * and the potential replacement are in the same exception handler.
    */
   boolean areMatchingExits(Node nodeThis, Node nodeThat) {
+    if (!isASTNormalized()
+        && (nodeThis.isThrow() || nodeThis.isReturn())
+        && nodeThis.hasChildren()) {
+      // if the ast isn't normalized "return a" or "throw a" may not mean the same thing in
+      // different blocks.
+      return false;
+    }
     return nodeThis.isEquivalentTo(nodeThat)
         && (!isExceptionPossible(nodeThis)
             || getExceptionHandler(nodeThis) == getExceptionHandler(nodeThat));
@@ -802,15 +808,22 @@ class PeepholeMinimizeConditions
           // http://blickly.github.io/closure-compiler-issues/#291
           // We try to detect this case, and not fold EXPR_RESULTs
           // into other expressions.
-          if (maybeExpr.getFirstChild().isCall()) {
+          // e.g.:
+          // if (e.onchange) {
+          //    e.onchange({
+          //        _extendedByPrototype: Prototype.emptyFunction,
+          //        target: e
+          //    });
+          //  }
+          if (maybeExpr.getFirstChild().isCall() || maybeExpr.getFirstChild().isOptChainCall()) {
             Node calledFn = maybeExpr.getFirstFirstChild();
 
             // We only have to worry about methods with an implicit 'this'
             // param, or this doesn't happen.
-            if (calledFn.isGetElem()) {
+            if (calledFn.isGetElem() || calledFn.isOptChainGetElem()) {
               return false;
-            } else if (calledFn.isGetProp()
-                       && calledFn.getLastChild().getString().startsWith("on")) {
+            } else if ((calledFn.isGetProp() || calledFn.isOptChainGetProp())
+                && calledFn.getLastChild().getString().startsWith("on")) {
               return false;
             }
           }
@@ -1033,8 +1046,8 @@ class PeepholeMinimizeConditions
           // In the last two cases, code size may increase slightly (adding
           // some parens because the comma operator has a low precedence) but
           // the new AST is easier for other passes to handle.
-          TernaryValue rightVal = NodeUtil.getPureBooleanValue(right);
-          if (NodeUtil.getPureBooleanValue(right) != TernaryValue.UNKNOWN) {
+          TernaryValue rightVal = getSideEffectFreeBooleanValue(right);
+          if (getSideEffectFreeBooleanValue(right) != TernaryValue.UNKNOWN) {
             Token type = n.getToken();
             Node replacement = null;
             boolean rval = rightVal.toBoolean(true);
@@ -1083,8 +1096,8 @@ class PeepholeMinimizeConditions
           //   Only when x is NAME, hence x does not have side effects
           //   x ? x : y        --> x || y
           Node replacement = null;
-          TernaryValue trueNodeVal = NodeUtil.getPureBooleanValue(trueNode);
-          TernaryValue falseNodeVal = NodeUtil.getPureBooleanValue(falseNode);
+          TernaryValue trueNodeVal = getSideEffectFreeBooleanValue(trueNode);
+          TernaryValue falseNodeVal = getSideEffectFreeBooleanValue(falseNode);
           if (trueNodeVal == TernaryValue.TRUE && falseNodeVal == TernaryValue.FALSE) {
             // Remove useless conditionals, keep the condition
             condition.detach();
@@ -1120,7 +1133,7 @@ class PeepholeMinimizeConditions
 
       default:
         // while(true) --> while(1)
-        TernaryValue nVal = NodeUtil.getPureBooleanValue(n);
+        TernaryValue nVal = getSideEffectFreeBooleanValue(n);
         if (nVal != TernaryValue.UNKNOWN) {
           boolean result = nVal.toBoolean(true);
           int equivalentResult = result ? 1 : 0;

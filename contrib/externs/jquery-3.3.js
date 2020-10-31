@@ -1320,7 +1320,7 @@ jQuery.prototype.length;
 
 /**
  * @param {*} obj
- * @return {Array<*>}
+ * @return {!Array<*>}
  * @nosideeffects
  */
 jQuery.makeArray = function(obj) {};
@@ -1426,7 +1426,7 @@ jQuery.prototype.nextUntil = function(arg1, filter) {};
 
 /**
  * @param {boolean=} removeAll
- * @return {Object}
+ * @return {!typeof jQuery}
  */
 jQuery.noConflict = function(removeAll) {};
 
