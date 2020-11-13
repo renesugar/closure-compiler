@@ -61,7 +61,7 @@ final class RemoveTypes implements CompilerPass {
      */
     @Nullable
     private static JSDocInfo convertJSDocInfo(JSDocInfo jsdoc) {
-      JSDocInfoBuilder builder = new JSDocInfoBuilder(/* parseDocumentation= */ false);
+      JSDocInfoBuilder builder = JSDocInfo.builder();
       if (jsdoc.getLicense() != null) {
         builder.addLicense(jsdoc.getLicense());
       }
@@ -82,6 +82,17 @@ final class RemoveTypes implements CompilerPass {
       }
       if (!jsdoc.getThrownTypes().isEmpty()) {
         builder.recordThrowType(createUnknown());
+      }
+
+      // Used by DevirtualizeMethods and CollapseProperties
+      if (jsdoc.isConstructor()) {
+        builder.recordConstructor();
+      }
+      if (jsdoc.isInterface()) {
+        builder.recordInterface();
+      }
+      if (jsdoc.usesImplicitMatch()) {
+        builder.recordImplicitMatch();
       }
       return builder.build();
     }

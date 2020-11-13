@@ -285,11 +285,6 @@ public final class DefaultPassConfig extends PassConfig {
       checks.add(extraRequires);
     }
 
-    if (options.enables(DiagnosticGroups.MISSING_REQUIRE)
-        || options.enables(DiagnosticGroups.STRICT_MISSING_REQUIRE)) {
-      checks.add(missingAndExtraRequires);
-    }
-
     if (options.enables(DiagnosticGroups.STRICTER_MISSING_REQUIRE)) {
       checks.add(checkMissingRequires);
     }
@@ -681,6 +676,14 @@ public final class DefaultPassConfig extends PassConfig {
       passes.add(replaceStrings);
     }
 
+    if (options.checkTypes || options.inferTypes) {
+      passes.add(typesToColors);
+    }
+
+    if (!options.shouldUnsafelyPreserveTypesForDebugging()) {
+      passes.add(removeTypes);
+    }
+
     // TODO(user): This forces a first crack at crossChunkCodeMotion
     // before devirtualization. Once certain functions are devirtualized,
     // it confuses crossChunkCodeMotion ability to recognized that
@@ -716,6 +719,14 @@ public final class DefaultPassConfig extends PassConfig {
       passes.add(flowSensitiveInlineVariables);
     }
 
+    if (options.checkTypes || options.inferTypes) {
+      passes.add(typesToColors);
+    }
+
+    if (!options.shouldUnsafelyPreserveTypesForDebugging()) {
+      passes.add(removeTypes);
+    }
+
     passes.addAll(getMainOptimizationLoop());
     passes.add(createEmptyPass(PassNames.AFTER_MAIN_OPTIMIZATIONS));
 
@@ -730,14 +741,6 @@ public final class DefaultPassConfig extends PassConfig {
     }
 
     passes.add(createEmptyPass("afterModuleMotion"));
-
-    if (options.checkTypes || options.inferTypes) {
-      passes.add(typesToColors);
-    }
-
-    if (!options.shouldUnsafelyPreserveTypesForDebugging()) {
-      passes.add(removeTypes);
-    }
 
     // Some optimizations belong outside the loop because running them more
     // than once would either have no benefit or be incorrect.
@@ -1180,14 +1183,6 @@ public final class DefaultPassConfig extends PassConfig {
           .setName("checkExtraRequires")
           .setFeatureSetForChecks()
           .setInternalFactory(CheckExtraRequires::new)
-          .build();
-
-  /** Checks that all constructed classes are goog.require()d. */
-  private final PassFactory missingAndExtraRequires =
-      PassFactory.builderForHotSwap()
-          .setName("checkMissingAndExtraRequires")
-          .setFeatureSetForChecks()
-          .setInternalFactory(CheckMissingAndExtraRequires::new)
           .build();
 
   private final PassFactory checkMissingRequires =

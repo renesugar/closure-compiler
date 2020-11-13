@@ -33,7 +33,7 @@ import com.google.common.collect.Streams;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.NodeTraversal.ScopedCallback;
 import com.google.javascript.jscomp.colors.Color;
-import com.google.javascript.jscomp.colors.PrimitiveColor;
+import com.google.javascript.jscomp.colors.NativeColorId;
 import com.google.javascript.jscomp.parsing.ParsingUtil;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
@@ -1634,13 +1634,15 @@ public final class NodeUtil {
   static boolean mayBeString(Node n, boolean useType) {
     if (useType) {
       Color color = n.getColor();
-      if (PrimitiveColor.STRING.equals(color)) {
-        return true;
-      } else if (PrimitiveColor.NUMBER.equals(color)
-          || PrimitiveColor.BIGINT.equals(color)
-          || PrimitiveColor.BOOLEAN.equals(color)
-          || PrimitiveColor.NULL_OR_VOID.equals(color)) {
-        return false;
+      if (color != null) {
+        if (color.is(NativeColorId.STRING)) {
+          return true;
+        } else if (color.is(NativeColorId.NUMBER)
+            || color.is(NativeColorId.BIGINT)
+            || color.is(NativeColorId.BOOLEAN)
+            || color.is(NativeColorId.NULL_OR_VOID)) {
+          return false;
+        }
       }
       JSType type = n.getJSType();
       if (type != null) {
@@ -5322,7 +5324,7 @@ public final class NodeUtil {
   }
 
   static JSDocInfo createConstantJsDoc() {
-    JSDocInfoBuilder builder = new JSDocInfoBuilder(false);
+    JSDocInfoBuilder builder = JSDocInfo.builder();
     builder.recordConstancy();
     return builder.build();
   }
@@ -5472,9 +5474,11 @@ public final class NodeUtil {
 
     JSType type = fnNode.getJSType();
     JSDocInfo jsDocInfo = getBestJSDocInfo(fnNode);
+    Color color = fnNode.getColor();
 
     return (type != null && type.isConstructor())
         || (jsDocInfo != null && jsDocInfo.isConstructor())
+        || (color != null && color.isConstructor())
         || isEs6Constructor(fnNode);
   }
 

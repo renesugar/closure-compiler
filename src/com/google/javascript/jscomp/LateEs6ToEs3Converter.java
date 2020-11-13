@@ -17,7 +17,6 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.javascript.jscomp.Es6ToEs3Util.createType;
-import static com.google.javascript.jscomp.Es6ToEs3Util.withType;
 
 import com.google.common.collect.Lists;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
@@ -68,7 +67,6 @@ public final class LateEs6ToEs3Converter implements NodeTraversal.Callback, HotS
 
   @Override
   public void process(Node externs, Node root) {
-    TranspilationPasses.processTranspile(compiler, externs, transpiledFeatures, this);
     TranspilationPasses.processTranspile(compiler, root, transpiledFeatures, this);
     TranspilationPasses.maybeMarkFeaturesAsTranspiledAway(compiler, transpiledFeatures);
   }
@@ -224,8 +222,7 @@ public final class LateEs6ToEs3Converter implements NodeTraversal.Callback, HotS
     result.useSourceInfoIfMissingFromForTree(obj);
     obj.replaceWith(result);
 
-    JSType simpleObjectType = null;
-    Node var = IR.var(astFactory.createName(objName, objectType), withType(obj, simpleObjectType));
+    Node var = IR.var(astFactory.createName(objName, objectType), obj);
     var.useSourceInfoIfMissingFromForTree(statement);
     statement.getParent().addChildBefore(var, statement);
     compiler.reportChangeToEnclosingScope(var);
